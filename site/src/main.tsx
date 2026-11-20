@@ -11,6 +11,7 @@ import { Removals } from './views/Removals.tsx'
 import { Insights } from './views/Insights.tsx'
 import { Prices } from './views/Prices.tsx'
 import { Watchers } from './views/Watchers.tsx'
+import { Guide } from './views/Guide.tsx'
 import { Refresh } from './refresh.tsx'
 
 export interface Ctx {
@@ -23,7 +24,7 @@ export interface Ctx {
 
 const TABS: [string, string][] = [
   ['overview', 'Overview'], ['events', 'Events'], ['apps', 'Apps'], ['removals', 'Removals'],
-  ['insights', 'Insights'], ['prices', 'Prices'], ['watchers', 'Watchers'],
+  ['insights', 'Insights'], ['prices', 'Prices'], ['watchers', 'Watchers'], ['guide', 'Guide'],
 ]
 
 interface Route { cat?: string; tab: string; query: string; app?: number }
@@ -64,6 +65,7 @@ function App() {
       case 'prices': return <Prices {...ctx} />
       // 'reviews' is the old name of the tab: links to it still work
       case 'watchers': case 'reviews': return <Watchers {...ctx} />
+      case 'guide': return <Guide {...ctx} />
       default: return <Overview {...ctx} />
     }
   })()

@@ -39,6 +39,10 @@ decide → 12 parallel fetch jobs → apply   ──token────►  state/
 
 **Refresh now.** The button in the site's header starts a full check right away (~7 min) through `functions/api/refresh.js`, behind the same login. Everyone with the site open sees it running, a second press while one runs does nothing, and open pages reload when the new data is published. The removal recheck follows 3 hours later as usual. Try the button locally with `MOCK_REFRESH=1 npm run dev`.
 
+**Guide.** The site's Guide tab explains every tab, the Slack alerts and the terms for the team, in plain words (`site/src/views/Guide.tsx`) — update it along with the features.
+
+**Test alerts.** Actions → `slack-test` → Run workflow sends one sample of each alert to Slack, marked TEST: a bad review, a removal wave, a watched app removed. Made-up apps, same formatting code as the real alerts (`collector/slacktest.ts`).
+
 **What counts as a removal.** An app is removed when it is missing from all of its storefronts on two checks in a row, at least 3 hours apart. So a ban reaches Slack on the day it happens, around 12:00.
 
 **Ratings growth** (Trending, "Updates that worked") only counts storefronts the app was already in. An app found in a new storefront doesn't look like a jump in ratings. Release impact uses the actual number of days between checks, since checks aren't always daily.

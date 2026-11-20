@@ -1,0 +1,25 @@
+name: slack-test
+
+# By hand: sends one sample of each Slack alert, marked TEST — a bad review of a watched app, a removal wave in a
+# category, a watched app removed — so the team knows what the real ones look like. Made-up apps; it reads no data,
+# only uses the Slack webhook. The texts come from the same code as the real alerts (collector/slacktest.ts).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Send the test messages
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SITE_URL: ${{ vars.SITE_URL }}
+        run: node collector/slacktest.ts
