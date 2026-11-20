@@ -10,7 +10,7 @@ Everything runs on free tiers. This repository is public (unlimited Actions minu
 
 ```
 GitHub Actions in this repo (cron)                   private repo, `data` branch     Cloudflare Pages (login)
-decide → 12 parallel fetch jobs → apply   ─deploy key─►  state/*.json.enc   ──►   static site behind a password
+decide → 12 parallel fetch jobs → apply   ──token────►  state/*.json.enc   ──►   static site behind a password
           (each its own IP)     (diff, save)             (encrypted, 1 commit)
 12:00 — removal recheck · weekly — subscription prices
 ──► Slack: bans, bad reviews, failures
@@ -51,7 +51,7 @@ decide → 12 parallel fetch jobs → apply   ─deploy key─►  state/*.json.
 
 **Full search every day.** A daily check is every term in every storefront (~860 searches) plus every known app (~260 lookups, 150 apps each): ~1,100 requests, ~63 min on one runner, ~6 min on 12. Public repositories get unlimited Actions minutes, so nothing has to be cut. In a private repository (2,000 free minutes a month) set `searchRotationDays` to 3: known apps are still looked up daily, and the search for new ones is spread over 3 days.
 
-**Public repository, private data.** What anyone can see here: the code, `config/` (categories, search terms, favorites) and run logs, which only show counts. The fetch jobs' artifacts are encrypted. The database and its history live in a private repository: the workflow reaches it with a deploy key that has access to that one repository only (`DATA_REPO_KEY` secret). The repository variable `DATA_REPO` names it (default: `<owner>/app_reviewer`). GitHub turns schedules off in a public repository after 60 days without a commit, so the workflow adds an empty commit when the last one is 45 days old.
+**Public repository, private data.** What anyone can see here: the code, `config/` (categories, search terms, favorites) and run logs, which only show counts. The fetch jobs' artifacts are encrypted. The database and its history live in a private repository: the workflow reaches it with a fine-grained token that has access to that one repository only (`DATA_REPO_TOKEN` secret; deploy keys are turned off in our organization). The repository variable `DATA_REPO` names it (default: `<owner>/app_reviewer`). GitHub turns schedules off in a public repository after 60 days without a commit, so the workflow adds an empty commit when the last one is 45 days old.
 
 ## Commands
 
@@ -80,9 +80,9 @@ All secrets and variables below go to this repository: Settings → Secrets and 
 
 0. **Encryption key.** `openssl rand -base64 32 | pbcopy` → secret `DATA_KEY` (and a copy in the password manager).
 1. **Data repository.** A private repository for the database (the variable `DATA_REPO`, default `<owner>/app_reviewer`). The first run creates its `data` branch; ours started from an import of the Mac app's data.
-   - `ssh-keygen -t ed25519 -N "" -C app-radar-data -f app-radar-data` makes a key pair.
-   - `app-radar-data.pub` → the data repository → Settings → Deploy keys → Add, with **Allow write access**.
-   - `app-radar-data` (the private half) → secret `DATA_REPO_KEY` in this repository. Then delete both files.
+   - A fine-grained GitHub token: github.com/settings/personal-access-tokens/new → Resource owner: the organization → Only select repositories: the data repository → Repository permissions → **Contents: Read and write**.
+   - Save it as the secret `DATA_REPO_TOKEN` in this repository.
+   - When it expires, runs fail with "cannot reach … check the DATA_REPO_TOKEN secret" (and a Slack message): make a new one and replace the secret.
 2. **Slack.** You need an incoming webhook: api.slack.com/apps → Create App → Incoming Webhooks → Add to channel. Save the URL as the secret `SLACK_WEBHOOK_URL`.
 3. **Cloudflare Pages:**
    - The `app-radar` project is created on the first deploy from Actions.

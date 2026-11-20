@@ -12,7 +12,7 @@ name: collect
 # Other modes (recheck, publish, reviews, prices) run in the apply job alone.
 #
 # The database is not in this repository: it lives in a private one (DATA_REPO, branch `data`), reached with a
-# deploy key (DATA_REPO_KEY secret) — see tools/data-repo.sh. This repository holds only code and can be public.
+# fine-grained token (DATA_REPO_TOKEN secret) — see tools/data-repo.sh. This repository holds only code and can be public.
 on:
   schedule:
     - cron: '5 * * * *'
@@ -23,7 +23,7 @@ on:
         default: auto
 
 permissions:
-  # only to keep scheduled runs alive (see the last steps); the database is written with the deploy key
+  # only to keep scheduled runs alive (see the last steps); the database is written with DATA_REPO_TOKEN
   contents: write
 
 concurrency:
@@ -55,7 +55,7 @@ jobs:
           node-version: 24
       - name: Restore data
         env:
-          DATA_REPO_KEY: ${{ secrets.DATA_REPO_KEY }}
+          DATA_REPO_TOKEN: ${{ secrets.DATA_REPO_TOKEN }}
         run: tools/data-repo.sh restore
       - id: due
         env:
@@ -78,7 +78,7 @@ jobs:
           node-version: 24
       - name: Restore data
         env:
-          DATA_REPO_KEY: ${{ secrets.DATA_REPO_KEY }}
+          DATA_REPO_TOKEN: ${{ secrets.DATA_REPO_TOKEN }}
         run: tools/data-repo.sh restore
       - name: Fetch
         env:
@@ -107,7 +107,7 @@ jobs:
       # force-pushed after every run
       - name: Restore data
         env:
-          DATA_REPO_KEY: ${{ secrets.DATA_REPO_KEY }}
+          DATA_REPO_TOKEN: ${{ secrets.DATA_REPO_TOKEN }}
         run: tools/data-repo.sh restore
       - if: needs.decide.outputs.mode == 'daily'
         uses: actions/download-artifact@v8
@@ -129,7 +129,7 @@ jobs:
       - name: Save data
         if: always()
         env:
-          DATA_REPO_KEY: ${{ secrets.DATA_REPO_KEY }}
+          DATA_REPO_TOKEN: ${{ secrets.DATA_REPO_TOKEN }}
         run: tools/data-repo.sh save
 
       - name: Build site
@@ -160,12 +160,28 @@ jobs:
           git commit -q --allow-empty -m "Keep scheduled runs on"
           git push -q origin "HEAD:$GITHUB_REF_NAME"
 
+  # any job failed: tell Slack
+  notify:
+    needs: [decide, fetch, apply]
+    if: failure()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: config
       - name: Tell Slack the collector failed
-        if: failure()
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          DECIDE: ${{ needs.decide.result }}
         run: |
           [ -z "$SLACK_WEBHOOK_URL" ] && exit 0
+          # decide runs every hour, so a lasting cause (an expired DATA_REPO_TOKEN, say) fails it every hour:
+          # from the schedule, say so once a day, in the daily hour
+          if [ "$DECIDE" = failure ] && [ "$GITHUB_EVENT_NAME" = schedule ]; then
+            hour=$(TZ=$(jq -r .timezone config/settings.json) date +%-H)
+            [ "$hour" = "$(jq -r .dailyHour config/settings.json)" ] || { echo "decide failed; Slack hears about it in the daily hour"; exit 0; }
+          fi
           curl -sS -X POST -H 'Content-Type: application/json' \
             --data "{\"text\":\"⚠️ App Radar: the collector failed — <${RUN_URL}|run log>\"}" "$SLACK_WEBHOOK_URL"
