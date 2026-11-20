@@ -79,7 +79,7 @@ npm test                         # collector logic + site login checks
 All secrets and variables below go to this repository: Settings → Secrets and variables → Actions.
 
 0. **Encryption key.** `openssl rand -base64 32 | pbcopy` → secret `DATA_KEY` (and a copy in the password manager).
-1. **Data repository.** A private repository for the database (the variable `DATA_REPO`, default `<owner>/app_reviewer`). The first run creates its `data` branch; ours started from an import of the Mac app's data.
+1. **Data repository.** A private repository for the database (the variable `DATA_REPO`, default `<owner>/app_reviewer`). The first run creates its `data` branch; ours started from an import of the Mac app's data. To put a plain local copy of the database there (a folder with `global.json`, `cleaners.json`, …), run `tools/import-local.sh <folder>` on your Mac and paste the `DATA_KEY` value when asked: it encrypts the files with that key and replaces the branch.
    - A fine-grained GitHub token: github.com/settings/personal-access-tokens/new → Resource owner: the organization → Only select repositories: the data repository → Repository permissions → **Contents: Read and write**.
    - Save it as the secret `DATA_REPO_TOKEN` in this repository.
    - When it expires, runs fail with "cannot reach … check the DATA_REPO_TOKEN secret" (and a Slack message): make a new one and replace the secret.
