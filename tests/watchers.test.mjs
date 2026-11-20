@@ -5,7 +5,7 @@ let failed = 0
 const check = (name, ok) => { if (!ok) failed++; console.log(`${ok ? '✓' : '✗'} ${name}`) }
 
 const SITE = 'https://app-radar.example'
-const env = { GITHUB_TOKEN: 'test-token' }
+const env = { GITHUB_TOKEN: 'actions-token', DATA_REPO_TOKEN: 'data-token' }
 const b64 = s => Buffer.from(s, 'utf8').toString('base64')
 const CONTENTS = 'https://api.github.com/repos/4partners-sdk/app_reviewer/contents/watchers.json'
 
@@ -62,13 +62,13 @@ check('id from a store link', appId('https://apps.apple.com/us/app/some-cleaner/
 check('id from "id…" and digits', appId('id9876543210') === 9876543210 && appId(' 9876543210 ') === 9876543210)
 check('no id in junk', appId('cleanup') === undefined && appId('https://example.com/12') === undefined)
 
-let r = await call(onRequestGet({ env: {} }))
-check('no token → 503, read-only on the site', r.status === 503 && r.body.configured === false)
+let r = await call(onRequestGet({ env: { GITHUB_TOKEN: 'actions-token' } }))
+check('no DATA_REPO_TOKEN → 503, read-only on the site', r.status === 503 && r.body.configured === false)
 
 let f = fake({ file: [{ id: 1, name: 'A' }] })
 r = await call(onRequestGet({ env }))
 check('GET reads the list from the watchers branch with the token', r.status === 200 && r.body.apps[0].name === 'A'
-  && f.calls[0].url === `${CONTENTS}?ref=watchers` && f.calls[0].headers.Authorization === 'Bearer test-token')
+  && f.calls[0].url === `${CONTENTS}?ref=watchers` && f.calls[0].headers.Authorization === 'Bearer data-token')
 
 f = fake()
 r = await call(onRequestGet({ env }))
@@ -87,6 +87,15 @@ check('…stores name, developer, icon, who and when', f.state.file.length === 1
 check('…looks the app up in the US first', f.calls.find(c => c.url.startsWith('https://itunes')).url.includes('country=us'))
 check('…and starts its first check (mode reviews) when idle', r.body.started === true
   && f.calls.find(c => c.url.endsWith('/dispatches')).body.inputs.mode === 'reviews')
+const isData = c => c.url.includes('/repos/4partners-sdk/app_reviewer')
+check('data repository calls use only DATA_REPO_TOKEN, workflow calls only GITHUB_TOKEN',
+  f.calls.filter(isData).every(c => c.headers.Authorization === 'Bearer data-token')
+  && f.calls.filter(c => c.url.includes('/actions/')).every(c => c.headers.Authorization === 'Bearer actions-token'))
+
+f = fake({ file: [] })
+r = await call(onRequestPost({ request: post({ op: 'add', app: '42424242' }), env: { DATA_REPO_TOKEN: 'data-token' } }))
+check('without GITHUB_TOKEN the app is still added, its check waits for the next run', r.status === 200 && f.state.file.length === 1
+  && r.body.started === false && !f.calls.some(c => c.url.includes('/actions/')))
 
 f = fake({ file: [{ id: 42424242, name: 'Cleaner Ü' }] })
 r = await call(onRequestPost({ request: post({ op: 'add', app: '42424242' }), env }))
@@ -124,7 +133,7 @@ check('from another site → 403', r.status === 403 && f.calls.length === 0)
 
 fake({ file: [], contentsStatus: 401 })
 r = await call(onRequestGet({ env }))
-check('expired token → 502 that says so', r.status === 502 && r.body.error.includes('expired'))
+check('expired token → 502 that names DATA_REPO_TOKEN', r.status === 502 && r.body.error.includes('DATA_REPO_TOKEN secret is wrong or expired'))
 
 console.log(failed ? `${failed} failed` : 'all passed')
 process.exit(failed ? 1 : 0)

@@ -96,7 +96,12 @@ All secrets and variables below go to this repository: Settings → Secrets and 
    - Workers & Pages → `app-radar` → Settings → Variables and Secrets → Add → type **Secret**, name `BASIC_AUTH`, value `login:password`. For several people: `anna:pass1, oleg:pass2` (no commas inside passwords). Add it for both Production and Preview.
    - Then redeploy: Actions → collect → Run workflow → mode `publish` (~2 min).
    - Without the secret the site answers 503 — closed, not open.
-5. **Refresh button and watch list.** A fine-grained GitHub token: github.com/settings/personal-access-tokens/new → Resource owner: the organization → Only select repositories: this one and the data repository → Repository permissions → **Actions: Read and write** (the Refresh button) and **Contents: Read and write** (the watch list). Save it in the Pages project, next to `BASIC_AUTH`, as the secret `GITHUB_TOKEN` (Production and Preview). If the repositories aren't `4partners-sdk/app-radar` and `4partners-sdk/app_reviewer`, add text variables `GITHUB_REPO` and `DATA_REPO` = `owner/name` too. Without the token the button is hidden and the watch list is read-only; when it expires, both say so — make a new one.
+5. **Refresh button and watch list** — two fine-grained tokens (github.com/settings/personal-access-tokens/new → Resource owner: the organization), saved in the Pages project next to `BASIC_AUTH` as secrets, for Production and Preview:
+   - `GITHUB_TOKEN`: only this repository → **Actions: Read and write**. The Refresh button, and starting a newly added app's first check.
+   - `DATA_REPO_TOKEN`: only the data repository → **Contents: Read and write**. The watch list.
+   - Keep them apart: a token that could write to this repository could change the code the workflow runs with every secret.
+   - If the repositories aren't `4partners-sdk/app-radar` and `4partners-sdk/app_reviewer`, add text variables `GITHUB_REPO` and `DATA_REPO` = `owner/name`.
+   - Without them the button is hidden and the watch list is read-only; when one expires, the site says which — make a new one.
 6. **`SITE_URL` variable.** The site address (`https://<project>.pages.dev`), so Slack messages link to the dashboard.
 7. **First run.** Actions → collect → Run workflow → mode `daily`. This also shows whether Apple answers requests from GitHub's servers.
 

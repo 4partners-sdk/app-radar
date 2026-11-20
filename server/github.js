@@ -1,9 +1,11 @@
 // Shared by the site's Pages Functions (functions/api/*): GitHub API calls with the GITHUB_TOKEN secret, the
 // same-site check for requests that change something, and JSON answers. Lives outside functions/ so it isn't a route.
 //
-// Pages project → Settings → Variables and Secrets:
-//   GITHUB_TOKEN (secret) — fine-grained token: "Actions: Read and write" on the code repository (Refresh button)
-//                           and "Contents: Read and write" on the data repository (watch list)
+// Pages project → Settings → Variables and Secrets — two tokens, so neither can do the other's job:
+//   GITHUB_TOKEN    (secret) — fine-grained, "Actions: Read and write" on the code repository only (Refresh button)
+//   DATA_REPO_TOKEN (secret) — fine-grained, "Contents: Read and write" on the data repository only (watch list).
+//                              Never give the site write access to the code repository: the workflow runs that code
+//                              with every secret.
 //   GITHUB_REPO, DATA_REPO (text, optional) — owner/name, default 4partners-sdk/app-radar and 4partners-sdk/app_reviewer
 
 export const WORKFLOW = 'collect.yml'
@@ -19,13 +21,13 @@ export class GitHubError extends Error {
   }
 }
 
-/** A GitHub API request: `path` starts with /repos/… */
-export function gh(env, path, init = {}) {
+/** A GitHub API request: `path` starts with /repos/…; GITHUB_TOKEN unless another token is given */
+export function gh(env, path, init = {}, token = env.GITHUB_TOKEN) {
   return fetch(`https://api.github.com${path}`, {
     ...init,
     headers: {
       Accept: 'application/vnd.github+json',
-      Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+      Authorization: `Bearer ${token}`,
       'User-Agent': 'app-radar',
       'X-GitHub-Api-Version': '2022-11-28',
       ...(init.body ? { 'Content-Type': 'application/json' } : {}),
@@ -82,10 +84,10 @@ export function login(request) {
   }
 }
 
-/** A 502 that says what to fix; `needs` names the token permission this endpoint relies on. */
-export function failed(e, needs) {
+/** A 502 that says what to fix: `secret` is the token this endpoint uses, `needs` the permission it relies on. */
+export function failed(e, needs, secret = 'GITHUB_TOKEN') {
   const status = e instanceof GitHubError ? e.status : 0
-  const hint = status === 401 ? ' — the GITHUB_TOKEN secret is wrong or expired'
+  const hint = status === 401 ? ` — the ${secret} secret is wrong or expired`
     : status === 403 || status === 404 ? ` — the token needs ${needs}`
     : ''
   return json({ configured: true, error: (e?.message ?? String(e)) + hint }, 502)

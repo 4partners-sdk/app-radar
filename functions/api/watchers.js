@@ -1,7 +1,8 @@
 // The watch list on the site: apps whose bad reviews and removals go to Slack. It sits behind the site login.
 // Kept as watchers.json on the `watchers` branch of the private data repository — not in the public code, and not
 // in the database every run rewrites — so an edit shows at once and never waits for or races a run.
-// Needs the GITHUB_TOKEN secret with "Contents: Read and write" on the data repository (see server/github.js).
+// Needs the DATA_REPO_TOKEN secret: "Contents: Read and write" on the data repository only (see server/github.js).
+// GITHUB_TOKEN, if set, only starts an app's first check right away.
 //
 // GET  → { configured, apps }
 // POST { op: 'add', app: '<App Store link or id>', countries?: ['us', …] } → { configured, apps, started }
@@ -15,17 +16,21 @@ const NEEDS = '"Contents: Read and write" on the data repository'
 /** every app costs one review-feed request per storefront on each check */
 export const MAX_APPS = 25
 
+const fail = e => failed(e, NEEDS, 'DATA_REPO_TOKEN')
+/** the data repository's contents, with its own token */
+const data = (env, path, init) => gh(env, path, init, env.DATA_REPO_TOKEN)
+
 export async function onRequestGet({ env }) {
-  if (!env.GITHUB_TOKEN) return json({ configured: false }, 503)
+  if (!env.DATA_REPO_TOKEN) return json({ configured: false }, 503)
   try {
     return json({ configured: true, apps: (await read(env)).apps })
   } catch (e) {
-    return failed(e, NEEDS)
+    return fail(e)
   }
 }
 
 export async function onRequestPost({ request, env }) {
-  if (!env.GITHUB_TOKEN) return json({ configured: false }, 503)
+  if (!env.DATA_REPO_TOKEN) return json({ configured: false }, 503)
   if (!fromThisSite(request)) return json({ error: 'cross-site request' }, 403)
   let body
   try {
@@ -61,7 +66,7 @@ export async function onRequestPost({ request, env }) {
     }
     return json({ error: 'unknown op' }, 400)
   } catch (e) {
-    return failed(e, NEEDS)
+    return fail(e)
   }
 }
 
@@ -90,6 +95,7 @@ async function findApp(id, countries) {
 }
 
 async function startCheck(env) {
+  if (!env.GITHUB_TOKEN) return false
   try {
     if (isActive(await latestRun(env))) return false
     await dispatch(env, 'reviews')
@@ -106,7 +112,7 @@ const contents = env => `/repos/${dataRepo(env)}/contents/${FILE}`
 
 /** the list and the file's version (sha); no file or branch yet = an empty list */
 async function read(env) {
-  const r = await gh(env, `${contents(env)}?ref=${BRANCH}`)
+  const r = await data(env, `${contents(env)}?ref=${BRANCH}`)
   if (r.ok) {
     const file = await r.json()
     const apps = JSON.parse(fromBase64(file.content)).apps
@@ -114,7 +120,7 @@ async function read(env) {
   }
   if (r.status !== 404) throw new GitHubError(r.status)
   // a token without access to the repository gets 404 too: tell the two apart
-  const repo = await gh(env, `/repos/${dataRepo(env)}`)
+  const repo = await data(env, `/repos/${dataRepo(env)}`)
   if (!repo.ok) throw new GitHubError(repo.status)
   return { apps: [], sha: undefined }
 }
@@ -137,7 +143,7 @@ async function change(env, edit, message) {
 
 async function write(env, apps, sha, message) {
   const text = JSON.stringify({ apps }, null, 2) + '\n'
-  const r = await gh(env, contents(env), {
+  const r = await data(env, contents(env), {
     method: 'PUT',
     body: JSON.stringify({ message, content: toBase64(text), branch: BRANCH, ...(sha ? { sha } : {}) }),
   })
@@ -152,7 +158,7 @@ async function write(env, apps, sha, message) {
 async function createBranch(env, text, message) {
   const repo = `/repos/${dataRepo(env)}/git`
   const post = async (path, body) => {
-    const r = await gh(env, `${repo}/${path}`, { method: 'POST', body: JSON.stringify(body) })
+    const r = await data(env, `${repo}/${path}`, { method: 'POST', body: JSON.stringify(body) })
     if (r.status === 422 && path === 'refs') throw new Conflict() // created by someone else just now
     if (!r.ok) throw new GitHubError(r.status)
     return r.json()

@@ -100,7 +100,7 @@ export function Watchers(ctx: Ctx) {
         {note && <div class={`watch-note ${note.bad ? 'bad' : ''}`}>{note.text}</div>}
         {live?.error && <div class="warn">Couldn't load the watch list: {live.error}</div>}
         {live && !live.configured && !live.error &&
-          <div class="warn">Editing isn't set up: the site needs the GITHUB_TOKEN secret with access to the data repository. Showing the list as of the last check.</div>}
+          <div class="warn">Editing isn't set up: the site needs the DATA_REPO_TOKEN secret (Contents: Read and write on the data repository). Showing the list as of the last check.</div>}
         {!items.length && <Empty>No apps yet. Paste an App Store link above — your own apps, or any app whose reviews you want in Slack.</Empty>}
         {items.map(a => {
           const [kind, text] = status(a.row, ctx.index.countries.length)
