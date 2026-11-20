@@ -10,7 +10,7 @@ import { AppCard } from './views/AppCard.tsx'
 import { Removals } from './views/Removals.tsx'
 import { Insights } from './views/Insights.tsx'
 import { Prices } from './views/Prices.tsx'
-import { Reviews } from './views/Reviews.tsx'
+import { Watchers } from './views/Watchers.tsx'
 import { Refresh } from './refresh.tsx'
 
 export interface Ctx {
@@ -23,7 +23,7 @@ export interface Ctx {
 
 const TABS: [string, string][] = [
   ['overview', 'Overview'], ['events', 'Events'], ['apps', 'Apps'], ['removals', 'Removals'],
-  ['insights', 'Insights'], ['prices', 'Prices'], ['reviews', 'Reviews'],
+  ['insights', 'Insights'], ['prices', 'Prices'], ['watchers', 'Watchers'],
 ]
 
 interface Route { cat?: string; tab: string; query: string; app?: number }
@@ -62,7 +62,8 @@ function App() {
       case 'removals': return <Removals {...ctx} />
       case 'insights': return <Insights {...ctx} />
       case 'prices': return <Prices {...ctx} />
-      case 'reviews': return <Reviews {...ctx} />
+      // 'reviews' is the old name of the tab: links to it still work
+      case 'watchers': case 'reviews': return <Watchers {...ctx} />
       default: return <Overview {...ctx} />
     }
   })()
@@ -71,11 +72,11 @@ function App() {
       <header class="top">
         <div class="top-in">
           <div class="brand"><i />App Radar</div>
-          <select class="select" value={cat} onChange={e => { location.hash = href(route.tab === 'reviews' ? 'overview' : route.tab, (e.target as HTMLSelectElement).value) }}>
+          <select class="select" value={cat} onChange={e => { location.hash = href(route.tab === 'watchers' || route.tab === 'reviews' ? 'overview' : route.tab, (e.target as HTMLSelectElement).value) }}>
             {cats.map(c => <option key={c.id} value={c.id}>{c.name} · {c.active.toLocaleString('en-US')}</option>)}
           </select>
           <nav class="tabs">
-            {TABS.map(([id, label]) => <a key={id} class={`tab ${route.tab === id ? 'on' : ''}`} href={href(id)}>{label}</a>)}
+            {TABS.map(([id, label]) => <a key={id} class={`tab ${route.tab === id || (id === 'watchers' && route.tab === 'reviews') ? 'on' : ''}`} href={href(id)}>{label}</a>)}
           </nav>
           <div class="status">
             Last check: <b>{dateTime(index.lastDaily)}</b> ({ago(index.lastDaily)})<br />

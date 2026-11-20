@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'preact/hooks'
-import type { AppRow } from '../../collector/publish.ts'
+import type { AppRow, WatchRow } from '../../collector/publish.ts'
 import type { EventKind, GrowthPoint, InAppItem, Review, Run, Version, WatchEvent } from '../../collector/model.ts'
 
-export type { AppRow, EventKind, Review, Run, WatchEvent }
+export type { AppRow, EventKind, Review, Run, WatchEvent, WatchRow }
 
 export interface Index {
   generatedAt: string
@@ -16,7 +16,10 @@ export interface Index {
   featureWords: string
   riskyWords: string
   pricesTop: number
-  favorites: { id: number; name: string }[]
+  /** the watch list as of the last check; the site reads the live list from api/watchers */
+  watchers: WatchRow[]
+  lastReviews?: string
+  watchEveryHours: number
   categories: { id: string; name: string; enabled: boolean; active: number; removed: number }[]
 }
 

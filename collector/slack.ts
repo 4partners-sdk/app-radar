@@ -1,5 +1,6 @@
-// Slack incoming webhook: removals ("bans") and new bad reviews of favorites.
+// Slack incoming webhook: removals ("bans") per category, and the watched apps' removals and new bad reviews.
 import type { App, Review, WatchEvent } from './model.ts'
+import type { WatchNotice } from './watchers.ts'
 import { log } from './util.ts'
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -57,4 +58,19 @@ export function reviewsText(items: { review: Review; app: string }[]): string[] 
     out.push(`💬 *New bad reviews: ${items.length}*\n\n` + part.join('\n\n'))
   }
   return out
+}
+
+/** The watched apps' removals: gone from the App Store, gone from some storefronts, back again. */
+export function watchText(notices: WatchNotice[], tz: string, site?: string): string | undefined {
+  if (!notices.length) return undefined
+  const app = (x: WatchNotice) => `<https://apps.apple.com/app/id${x.app.id}|${esc(x.app.name)}>`
+  const where = (l?: string[]) => (l ?? []).map(c => c.toUpperCase()).join(' ')
+  const lines = notices.map(x =>
+    x.kind === 'removed'
+      ? `🚫 ${app(x)} — removed from the App Store` + (x.since ? ` · gone between ${time(x.lastSeen ?? x.since, tz)} and ${time(x.since, tz)}` : '')
+      : x.kind === 'pulled'
+        ? `🌍 ${app(x)} — no longer in ${where(x.countries)}`
+        : `✅ ${app(x)} — back in the App Store${x.countries?.length ? ` · ${where(x.countries)}` : ''}`)
+  const link = site ? `\n<${site.replace(/\/$/, '')}/#/all/watchers|Open the watch list>` : ''
+  return `👀 *Watched apps*\n${lines.join('\n')}${link}`
 }

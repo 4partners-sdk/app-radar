@@ -1,7 +1,7 @@
 // Writes what the dashboard reads: compact per-category files plus lazily loaded per-app details.
 import { rmSync } from 'node:fs'
 import { join } from 'node:path'
-import type { App, Category, CategoryState, GlobalState, Settings } from './model.ts'
+import type { App, Category, CategoryState, GlobalState, Settings, WatchState, WatchedApp } from './model.ts'
 import { gained, isBoost } from './app.ts'
 import { isTrial, plan } from './prices.ts'
 import { ROOT, writeJSON } from './store.ts'
@@ -38,13 +38,27 @@ function row(a: App, s: Settings, today: number) {
 
 export type AppRow = ReturnType<typeof row>
 
+/** A watched app as the dashboard shows it: the list entry, with names as the App Store lists them now. */
+function watchRow(a: WatchedApp, st: WatchState | undefined) {
+  return {
+    id: a.id, name: st?.name ?? a.name, developer: st?.developer ?? a.developer, icon: st?.icon ?? a.icon,
+    addedAt: a.addedAt, addedBy: a.addedBy,
+    checkedAt: st?.checkedAt, countries: st?.countries ?? [], lastSeen: st?.lastSeen,
+    removedAt: st?.removedAt, missingSince: st?.missingSince,
+    pulled: st?.pulled && Object.keys(st.pulled).length ? st.pulled : undefined,
+  }
+}
+
+export type WatchRow = ReturnType<typeof watchRow>
+
 export function publish(cats: { c: Category; cs: CategoryState }[], g: GlobalState, s: Settings, today: number) {
   rmSync(SITE_DATA, { recursive: true, force: true })
   const index = {
     generatedAt: new Date().toISOString(), lastDaily: g.lastDaily, lastRecheck: g.lastRecheck, lastPrices: g.lastPrices,
     timezone: s.timezone, dailyHour: s.dailyHour, retentionDays: s.retentionDays, countries: s.countries,
     featureWords: s.featureWords, riskyWords: s.riskyWords, pricesTop: s.pricesTop,
-    favorites: s.favorites,
+    watchers: (g.watchers ?? []).map(a => watchRow(a, g.watch?.[a.id])), lastReviews: g.lastReviews,
+    watchEveryHours: s.watchEveryHours ?? 3,
     categories: cats.map(({ c, cs }) => {
       const apps = Object.values(cs.apps)
       return { id: c.id, name: c.name, enabled: c.enabled, active: apps.filter(a => !a.removedAt).length, removed: apps.filter(a => a.removedAt).length }

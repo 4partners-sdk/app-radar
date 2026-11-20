@@ -60,7 +60,8 @@ export interface Settings {
   searchRotationDays?: number
   /** the daily check's requests are split across this many GitHub Actions jobs (each gets its own IP and Apple limit) */
   parallelJobs?: number
-  favorites: { id: number; name: string }[]
+  /** how often the watched apps' reviews and presence are read (the daily check reads them too) */
+  watchEveryHours?: number
   reviewMaxStars: number
   reviewWords: string
   riskyWords: string
@@ -188,12 +189,50 @@ export interface Review {
   baseline?: boolean
 }
 
+/** An app on the watch list. The list is edited on the site and kept as watchers.json in the data repository. */
+export interface WatchedApp {
+  id: number
+  name: string
+  developer?: string
+  icon?: string
+  addedAt?: string
+  /** the site login that added it */
+  addedBy?: string
+}
+
+/** Where a watched app is in the App Store, as of the last check. */
+export interface WatchState {
+  /** absent until the first check, which only learns where the app is live */
+  checkedAt?: string
+  /** storefronts the app is live in (among watched) */
+  countries: string[]
+  lastSeen?: string
+  /** consecutive checks the app was missing from every storefront it is live in */
+  missing?: number
+  missingSince?: string
+  removedAt?: string
+  /** consecutive misses in one storefront while the app is live elsewhere */
+  countryMiss?: Record<string, { n: number; since: string }>
+  /** storefront → since when the app is gone from it */
+  pulled?: Record<string, string>
+  /** as the App Store lists it now */
+  name?: string
+  developer?: string
+  icon?: string
+}
+
 export interface GlobalState {
   /** last successful daily run (any category checked) */
   lastDaily?: string
   lastRecheck?: string
   lastPrices?: string
-  /** review ids already seen, per favorite and storefront */
+  /** last read of the watched apps' reviews and presence */
+  lastReviews?: string
+  /** review ids already seen, per app and storefront */
   seen: Record<string, Record<string, string[]>>
   reviews: Review[]
+  /** the watch list as of the last check (the dashboard shows it) */
+  watchers?: WatchedApp[]
+  /** per watched app id */
+  watch?: Record<string, WatchState>
 }

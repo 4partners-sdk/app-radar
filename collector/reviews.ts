@@ -1,6 +1,6 @@
-// Reviews of favorite apps from the public RSS feed. A storefront's first read only remembers what is
+// Reviews of the watched apps from the public RSS feed. A storefront's first read only remembers what is
 // there; after that every new bad review is reported.
-import type { GlobalState, Review, Settings } from './model.ts'
+import type { GlobalState, Review, Settings, WatchedApp } from './model.ts'
 import { reviewFeed } from './api.ts'
 import { log, wordsIn } from './util.ts'
 
@@ -36,25 +36,26 @@ export function reasons(rating: number, title: string, text: string, maxStars: n
  */
 export const ALERT_DAYS = 3
 
-/** Reads every favorite in every storefront; returns the new bad reviews (not from a first read, not stale). */
-export async function readReviews(g: GlobalState, s: Settings): Promise<{ review: Review; app: string }[]> {
+/** Reads every watched app in every storefront; returns the new bad reviews (not from a first read, not stale). */
+export async function readReviews(g: GlobalState, s: Settings, apps: WatchedApp[]): Promise<{ review: Review; app: string }[]> {
   const fresh: { review: Review; app: string }[] = []
   const alertFrom = new Date(Date.now() - ALERT_DAYS * 86_400_000).toISOString()
   const known = new Set(g.reviews.map(r => r.id))
-  for (const fav of s.favorites) {
-    const seen = (g.seen[fav.id] ??= {})
+  for (const app of apps) {
+    const seen = (g.seen[app.id] ??= {})
     for (const c of s.countries) {
       let raw: RawReview[]
-      try { raw = parseFeed(await reviewFeed(fav.id, c)) } catch (e) { log(`reviews ${fav.id} ${c}: ${(e as Error).message}`); continue }
+      // no app id in the log: the run logs are public, the watch list is not
+      try { raw = parseFeed(await reviewFeed(app.id, c)) } catch (e) { log(`reviews (${c}): ${(e as Error).message}`); continue }
       const firstRead = !seen[c]
       const ids = new Set(seen[c] ?? [])
       for (const r of raw) {
         if (!r.id || ids.has(r.id) || known.has(r.id)) continue
-        const review: Review = { ...r, appId: fav.id, country: c, reasons: reasons(r.rating, r.title, r.text, s.reviewMaxStars, s.reviewWords) }
+        const review: Review = { ...r, appId: app.id, country: c, reasons: reasons(r.rating, r.title, r.text, s.reviewMaxStars, s.reviewWords) }
         if (firstRead) review.baseline = true
         g.reviews.push(review)
         known.add(r.id)
-        if (!firstRead && review.reasons.length && review.date >= alertFrom) fresh.push({ review, app: fav.name })
+        if (!firstRead && review.reasons.length && review.date >= alertFrom) fresh.push({ review, app: app.name })
       }
       seen[c] = [...new Set([...raw.map(r => r.id), ...(seen[c] ?? [])])].slice(0, 300)
     }

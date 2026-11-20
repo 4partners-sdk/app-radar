@@ -1,5 +1,6 @@
 // `node collector/selftest.ts` — checks of the pure logic, no network.
-import type { App } from './model.ts'
+import type { App, GlobalState, WatchState } from './model.ts'
+import { due } from './schedule.ts'
 import { gained, measureVersions, miss, missIn, recordRatings } from './app.ts'
 import { Classifier } from './classify.ts'
 import { applyCategory, todaysSearches } from './check.ts'
@@ -8,6 +9,8 @@ import { type Hit, type Job, type Listing, buildPlan, shareOf } from './plan.ts'
 import type { CategoryState, Settings, StoreApp } from './model.ts'
 import { parseInApp, period, plan, priceNumber, isTrial } from './prices.ts'
 import { parseFeed, reasons } from './reviews.ts'
+import { watchText } from './slack.ts'
+import { type Presence, parseList, updateWatch } from './watchers.ts'
 import { categories } from './store.ts'
 import { DAY, HOUR, hasWord } from './util.ts'
 
@@ -142,6 +145,57 @@ const one = parseFeed({ feed: { entry: { id: { label: '9' }, 'im:rating': { labe
 check('feed: single review as an object', one.length === 1 && one[0].author === 'Ann')
 check('reasons: 1★ + charged', reasons(1, 'Bad', 'charged twice', 2, 'charged, refund').join() === '1★,charged')
 check('whole words: AI not in email', !hasWord('Fixed email', 'AI') && hasWord('New AI-powered scan', 'AI'))
+
+// watched apps: where they are live, removals, storefronts they disappear from
+{
+  const app = { id: 7, name: 'Mine' }
+  const list = [app]
+  const watch: Record<string, WatchState> = {}
+  const at = (h: number) => new Date(Date.UTC(2026, 10, 20, h)).toISOString()
+  const seen = (map: Record<string, number[]>): Presence => new Map(Object.entries(map).map(([c, ids]) => [c, new Set(ids)]))
+  let x = updateWatch(list, watch, seen({ us: [7], gb: [7], de: [] }), at(0))
+  check('watch: the first check only learns where the app is live', !x.length && watch[7].countries.join() === 'gb,us' && watch[7].checkedAt === at(0))
+  x = updateWatch(list, watch, seen({ us: [], gb: [], de: [] }), at(3))
+  check('watch: gone once is not a removal yet', !x.length && watch[7].missing === 1 && watch[7].missingSince === at(3))
+  x = updateWatch(list, watch, seen({ us: [], gb: [], de: [] }), at(6))
+  check('watch: gone twice → removed, with when it was last seen', x.length === 1 && x[0].kind === 'removed' && x[0].lastSeen === at(0) && x[0].since === at(3))
+  x = updateWatch(list, watch, seen({ us: [], gb: [] }), at(9))
+  check('watch: a removal is reported once', !x.length)
+  x = updateWatch(list, watch, seen({ us: [7], gb: [7] }), at(12))
+  check('watch: back in the store → reported, state cleared', x.length === 1 && x[0].kind === 'back' && !watch[7].removedAt && !watch[7].missing)
+  x = updateWatch(list, watch, seen({ gb: [7] }), at(15))
+  check('watch: a storefront that did not answer is not a miss', !x.length && !watch[7].countryMiss?.us)
+  x = updateWatch(list, watch, seen({ us: [], gb: [7] }), at(18))
+  x = [...x, ...updateWatch(list, watch, seen({ us: [], gb: [7] }), at(21))]
+  check('watch: gone from one storefront twice → pulled from it', x.length === 1 && x[0].kind === 'pulled' && x[0].countries?.join() === 'us'
+    && watch[7].countries.join() === 'gb' && watch[7].pulled?.us === at(18))
+  x = updateWatch(list, watch, seen({ us: [7], gb: [7] }), at(24))
+  check('watch: back in that storefront → reported', x.length === 1 && x[0].kind === 'back' && x[0].countries?.join() === 'us' && !watch[7].pulled?.us)
+  x = updateWatch(list, watch, new Map(), at(27))
+  check('watch: no storefront answered → nothing changes', !x.length && !watch[7].missing)
+  const text = watchText([{ kind: 'removed', app, since: at(3), lastSeen: at(0) }, { kind: 'pulled', app: { id: 8, name: 'A & B' }, countries: ['ru', 'cn'] }], 'Europe/Warsaw', 'https://radar.example/')
+  check('watch: Slack text', text!.includes('🚫 <https://apps.apple.com/app/id7|Mine> — removed from the App Store · gone between')
+    && text!.includes('A &amp; B> — no longer in RU CN') && text!.includes('<https://radar.example/#/all/watchers|'))
+  check('watch list: junk entries are dropped', parseList('{"apps":[{"id":1,"name":"A"},{"id":"2"},null,{"name":"B"}]}').length === 1)
+}
+
+// the hourly schedule (Warsaw, daily at 09:00, recheck 3 h later, watched apps every 3 h)
+{
+  const s = { timezone: 'Europe/Warsaw', dailyHour: 9, recheckAfterHours: 3, watchEveryHours: 3 } as Settings
+  const t = (hhmm: string) => new Date(`2026-11-20T${hhmm}:00+01:00`)
+  const list = [{ id: 7, name: 'Mine' }]
+  const checked = { 7: { countries: ['us'], checkedAt: t('06:05').toISOString() } }
+  const g = (x: Partial<GlobalState>): GlobalState => ({ seen: {}, reviews: [], ...x })
+  check('due: daily after 09:00 when not done today', due(t('09:05'), g({ lastDaily: '2026-11-19T08:10:00Z' }), s) === 'daily')
+  check('due: before 09:00 nothing without watched apps', due(t('08:05'), g({ lastDaily: '2026-11-19T08:10:00Z' }), s) === undefined)
+  check('due: before 09:00 the watched apps still get checked', due(t('08:05'), g({ lastDaily: '2026-11-19T08:10:00Z', lastReviews: t('05:05').toISOString(), watch: checked }), s, list) === 'reviews')
+  check('due: 2 h 58 min after the daily → the watched apps, not yet the recheck', due(t('12:05'), g({ lastDaily: t('09:07').toISOString(), watch: checked, lastReviews: t('09:07').toISOString() }), s, list) === 'reviews')
+  check('due: recheck once 3 h have passed since the daily', due(t('13:05'), g({ lastDaily: t('09:07').toISOString() }), s, list) === 'recheck')
+  const done = { lastDaily: t('09:07').toISOString(), lastRecheck: t('12:06').toISOString(), lastReviews: t('12:06').toISOString(), watch: checked }
+  check('due: 2 h after the last read → nothing', due(t('14:05'), g(done), s, list) === undefined)
+  check('due: 2 h 59 min after → reviews (runs start at :05 give or take)', due(t('15:05'), g(done), s, list) === 'reviews')
+  check('due: an app added on the site → reviews at the next run', due(t('13:05'), g(done), s, [...list, { id: 8, name: 'New' }]) === 'reviews')
+}
 
 // classifier on the real rules
 {

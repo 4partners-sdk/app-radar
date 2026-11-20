@@ -57,7 +57,8 @@ export async function send(url: string, gate: RateGate, init: RequestInit = {}, 
       const r = await fetch(url, { ...init, signal: AbortSignal.timeout(30_000) })
       if (r.ok) { gate.succeeded(); return r }
       last = new HttpError(r.status)
-      log(`HTTP ${r.status} (attempt ${i + 1}) ${url.split('?')[0]}`) // no query: the logs may be public
+      // the logs are public: no query, and no app ids (review feeds carry the watched app's id in the path)
+      log(`HTTP ${r.status} (attempt ${i + 1}) ${url.split('?')[0].replace(/\d{5,}/g, '…')}`)
       if (!RETRY.has(r.status)) throw last
       gate.throttled()
     } catch (e) {

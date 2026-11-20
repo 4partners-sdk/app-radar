@@ -9,7 +9,8 @@ name: collect
 #   fetch  — N parallel jobs send the App Store requests; Apple limits each IP to ~20 calls a minute, so N jobs
 #            finish N times sooner. Each uploads its results, encrypted, as an artifact.
 #   apply  — joins the results, turns them into events, saves the encrypted database, deploys the site, Slack.
-# Other modes (recheck, publish, reviews, prices) run in the apply job alone.
+# Other modes (recheck, publish, reviews, prices) run in the apply job alone. `reviews` reads the watched apps
+# (the list people edit on the site): their removals and bad reviews, every few hours and right after an app is added.
 #
 # The database is not in this repository: it lives in a private one (DATA_REPO, branch `data`), reached with a
 # fine-grained token (DATA_REPO_TOKEN secret) — see tools/data-repo.sh. This repository holds only code and can be public.
@@ -60,6 +61,8 @@ jobs:
       - id: due
         env:
           DATA_KEY: ${{ secrets.DATA_KEY }}
+          # reads the watch list (watchers.json in the data repository): a newly added app is due at once
+          DATA_REPO_TOKEN: ${{ secrets.DATA_REPO_TOKEN }}
         run: node collector/main.ts due ${{ inputs.mode || 'auto' }}
 
   fetch:
@@ -121,6 +124,7 @@ jobs:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           SITE_URL: ${{ vars.SITE_URL }}
           DATA_KEY: ${{ secrets.DATA_KEY }}
+          DATA_REPO_TOKEN: ${{ secrets.DATA_REPO_TOKEN }}
           RUN_AT: ${{ needs.decide.outputs.run_at }}
           MODE: ${{ needs.decide.outputs.mode }}
         run: |

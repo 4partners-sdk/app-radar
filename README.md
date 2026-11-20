@@ -3,7 +3,7 @@
 The web version of AppResearch. Every day around 09:00 Warsaw time a collector checks the App Store by category (Cleaners, VPN, Security), and a login-protected site shows the analytics for the last 90 days. Slack gets:
 
 - bans (apps removed from the App Store);
-- bad reviews of favorite apps;
+- bad reviews and removals of the apps on the watch list, which people edit on the site (Watchers tab);
 - a message when the collector fails.
 
 Everything runs on free tiers. This repository is public (unlimited Actions minutes) and holds only code; the database is in a private repository.
@@ -13,7 +13,7 @@ GitHub Actions in this repo (cron)                   private repo, `data` branch
 decide → 12 parallel fetch jobs → apply   ──token────►  state/*.json.enc   ──►   static site behind a password
           (each its own IP)     (diff, save)             (encrypted, 1 commit)
 12:00 — removal recheck · weekly — subscription prices
-──► Slack: bans, bad reviews, failures
+──► Slack: bans, watched apps' removals and bad reviews, failures
 ```
 
 ## How it works
@@ -22,7 +22,8 @@ decide → 12 parallel fetch jobs → apply   ──token────►  state/
 |---|---|
 | Collector (TypeScript, run by Node 24 directly — no build, no dependencies) | `collector/` |
 | Category rules: search terms, regexes, genres | `config/categories.json` |
-| Countries, favorites, review words, retention, run time | `config/settings.json` |
+| Countries, review words, retention, run time | `config/settings.json` |
+| Watch list | the site's Watchers tab — kept as `watchers.json` on the `watchers` branch of the data repository |
 | Site (Vite + Preact) | `site/` |
 | Site login (Pages Function, HTTP Basic Auth) | `functions/_middleware.js` |
 | Schedule and deploy | `.github/workflows/collect.yml` |
@@ -31,7 +32,10 @@ decide → 12 parallel fetch jobs → apply   ──token────►  state/
 **Schedule.** The workflow runs every hour at :05, and the collector decides what is due:
 - **full check** — if there hasn't been one today and it is 09:00 or later in Warsaw;
 - **removal recheck** — 3 hours after the last full check;
+- **watched apps** — every 3 hours (`watchEveryHours`), and at the next run after an app is added: where it is live, removals, new reviews (~1 min);
 - **nothing** — in every other hour; such a run takes seconds.
+
+**Watchers.** The Watchers tab on the site holds the apps whose bad reviews and removals go to Slack — your own apps, or anyone's. Paste an App Store link or id and press Add; the first check starts right away when the collector is idle. Its first read of an app only learns where the app is live and remembers its current reviews, so adding an app doesn't flood Slack with old ones. Removals work like the categories' (two misses in a row, hours apart): gone from the App Store, gone from some storefronts while live in others, and back again. The list is edited through `functions/api/watchers.js` and kept in the private data repository — not in this public one, and not in the database every run rewrites, so an edit shows at once. Try it locally with `MOCK_REFRESH=1 npm run dev`.
 
 **Refresh now.** The button in the site's header starts a full check right away (~7 min) through `functions/api/refresh.js`, behind the same login. Everyone with the site open sees it running, a second press while one runs does nothing, and open pages reload when the new data is published. The removal recheck follows 3 hours later as usual. Try the button locally with `MOCK_REFRESH=1 npm run dev`.
 
@@ -51,7 +55,7 @@ decide → 12 parallel fetch jobs → apply   ──token────►  state/
 
 **Full search every day.** A daily check is every term in every storefront (~860 searches) plus every known app (~260 lookups, 150 apps each): ~1,100 requests, ~63 min on one runner, ~6 min on 12. Public repositories get unlimited Actions minutes, so nothing has to be cut. In a private repository (2,000 free minutes a month) set `searchRotationDays` to 3: known apps are still looked up daily, and the search for new ones is spread over 3 days.
 
-**Public repository, private data.** What anyone can see here: the code, `config/` (categories, search terms, favorites) and run logs, which only show counts. The fetch jobs' artifacts are encrypted. The database and its history live in a private repository: the workflow reaches it with a fine-grained token that has access to that one repository only (`DATA_REPO_TOKEN` secret; deploy keys are turned off in our organization). The repository variable `DATA_REPO` names it (default: `<owner>/app_reviewer`). GitHub turns schedules off in a public repository after 60 days without a commit, so the workflow adds an empty commit when the last one is 45 days old.
+**Public repository, private data.** What anyone can see here: the code, `config/` (categories, search terms) and run logs, which only show counts — no app ids or names. The watch list is in the private data repository. The fetch jobs' artifacts are encrypted. The database and its history live in a private repository: the workflow reaches it with a fine-grained token that has access to that one repository only (`DATA_REPO_TOKEN` secret; deploy keys are turned off in our organization). The repository variable `DATA_REPO` names it (default: `<owner>/app_reviewer`). GitHub turns schedules off in a public repository after 60 days without a commit, so the workflow adds an empty commit when the last one is 45 days old.
 
 ## Commands
 
@@ -62,7 +66,7 @@ node collector/main.ts fetch 0 12 # one parallel job's share of the requests →
 node collector/main.ts merge out # the rest of the daily check from all shards' results
 node collector/main.ts recheck   # recheck apps that went missing
 node collector/main.ts prices force   # re-read subscription prices
-node collector/main.ts reviews   # favorites' reviews
+node collector/main.ts reviews   # watched apps: removals and bad reviews
 node collector/main.ts publish   # rebuild the site's data files from the current db
 node collector/main.ts remeasure # measure every release again (after changing how impact is measured)
 node collector/selftest.ts       # logic checks, no network
@@ -92,11 +96,12 @@ All secrets and variables below go to this repository: Settings → Secrets and 
    - Workers & Pages → `app-radar` → Settings → Variables and Secrets → Add → type **Secret**, name `BASIC_AUTH`, value `login:password`. For several people: `anna:pass1, oleg:pass2` (no commas inside passwords). Add it for both Production and Preview.
    - Then redeploy: Actions → collect → Run workflow → mode `publish` (~2 min).
    - Without the secret the site answers 503 — closed, not open.
-5. **Refresh button.** A fine-grained GitHub token: github.com/settings/personal-access-tokens/new → Resource owner: the organization → Only select repositories: this one → Repository permissions → **Actions: Read and write**. Save it in the Pages project, next to `BASIC_AUTH`, as the secret `GITHUB_TOKEN` (Production and Preview). If this repository isn't `4partners-sdk/app-radar`, add a text variable `GITHUB_REPO` = `owner/name` too. Without the token the button is hidden; when it expires, the button says so — make a new one.
+5. **Refresh button and watch list.** A fine-grained GitHub token: github.com/settings/personal-access-tokens/new → Resource owner: the organization → Only select repositories: this one and the data repository → Repository permissions → **Actions: Read and write** (the Refresh button) and **Contents: Read and write** (the watch list). Save it in the Pages project, next to `BASIC_AUTH`, as the secret `GITHUB_TOKEN` (Production and Preview). If the repositories aren't `4partners-sdk/app-radar` and `4partners-sdk/app_reviewer`, add text variables `GITHUB_REPO` and `DATA_REPO` = `owner/name` too. Without the token the button is hidden and the watch list is read-only; when it expires, both say so — make a new one.
 6. **`SITE_URL` variable.** The site address (`https://<project>.pages.dev`), so Slack messages link to the dashboard.
 7. **First run.** Actions → collect → Run workflow → mode `daily`. This also shows whether Apple answers requests from GitHub's servers.
 
 ## Changing things
 
 - **Categories and search terms:** edit `config/categories.json`. The Cyrillic and CJK parts of the patterns match apps with Russian, Japanese and Korean names — keep them. After a big rule change, delete `state/<id>.json.enc` in the data repository's `data` branch: the next check builds a fresh baseline instead of a flood of false "new" apps.
-- **Favorites, countries, time, retention:** edit `config/settings.json`.
+- **Watch list:** the Watchers tab on the site.
+- **Countries, time, retention:** edit `config/settings.json`.

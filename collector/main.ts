@@ -6,13 +6,13 @@
 //   merge <dir>              the rest of the daily check from all shards' results: diff, save, Slack
 //   recheck   lookups for apps that missed the last check (+ reviews, Slack)
 //   prices    read subscription prices now
-//   reviews   read favorites' reviews now
+//   reviews   read the watched apps now: removals and bad reviews (also due every few hours on its own)
 //   publish   rebuild the dashboard files from the current state
 //   remeasure forget release measurements and boost events, measure every release again
 //   seed <state.json>   import the Mac app's data (only into an empty data folder)
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { Category, CategoryState, GlobalState, Settings, WatchEvent } from './model.ts'
+import type { Category, CategoryState, GlobalState, Settings, WatchEvent, WatchedApp } from './model.ts'
 import { IMPACT_DAYS, eventOf, measureVersions } from './app.ts'
 import { applyCategory, recheckCategory } from './check.ts'
 import { dataKey, isSealed, open, seal } from './crypto.ts'
@@ -21,9 +21,11 @@ import { scanPrices } from './prices.ts'
 import { publish } from './publish.ts'
 import { readReviews } from './reviews.ts'
 import { seed } from './seed.ts'
-import { post, removalsText, reviewsText } from './slack.ts'
+import { post, removalsText, reviewsText, watchText } from './slack.ts'
 import { DATA, categories, loadCategory, loadGlobal, prune, pruneGlobal, saveCategory, saveGlobal, settings } from './store.ts'
 import { DAY, HOUR, dayNumber, localHour, log } from './util.ts'
+import { checkWatched, loadWatchList } from './watchers.ts'
+import { due } from './schedule.ts'
 
 const s: Settings = settings()
 const day = (d: Date) => dayNumber(d, s.timezone)
@@ -51,9 +53,25 @@ function saveAll(cats: { c: Category; cs: CategoryState }[], g: GlobalState, now
   publish(cats, g, s, day(now))
 }
 
-async function reviewsStep(g: GlobalState): Promise<string[]> {
-  if (!s.favorites.length) return []
-  return reviewsText(await readReviews(g, s))
+/** The watch list, or undefined when it can't be read (the run goes on without it). */
+async function watchList(): Promise<WatchedApp[] | undefined> {
+  try {
+    return await loadWatchList()
+  } catch (e) {
+    log(`watch list: ${(e as Error).message}`)
+    return undefined
+  }
+}
+
+/** The watched apps: removals and new bad reviews, as Slack messages. */
+async function watchersStep(g: GlobalState, now: Date): Promise<string[]> {
+  const list = await watchList()
+  if (!list) return ['⚠️ *App Radar: couldn\'t read the watch list* — removals and reviews of the watched apps were not checked this time.']
+  g.watchers = list
+  g.lastReviews = now.toISOString()
+  const notices = await checkWatched(list, g, s.countries, now)
+  const texts = [watchText(notices, s.timezone, site), ...reviewsText(await readReviews(g, s, list))]
+  return texts.filter((t): t is string => !!t)
 }
 
 /** RUN_AT: the moment the run started — every parallel job and the merge plan and date things from it */
@@ -80,7 +98,7 @@ async function finishDaily(cats: { c: Category; cs: CategoryState }[], g: Global
   if (prices.read) g.lastPrices = now.toISOString()
   // state first: a crash in the slower steps below must not lose the check
   saveAll(cats, g, now)
-  alerts.push(...(await reviewsStep(g)))
+  alerts.push(...(await watchersStep(g, now)))
   saveAll(cats, g, now)
   if (failures.length) alerts.push(`⚠️ *App Radar: the check failed*\n${failures.join('\n')}`)
   await notify(alerts)
@@ -139,36 +157,37 @@ async function recheck() {
     alerts.push(removalsText(x.c.name, events, x.cs.apps, s.timezone, site))
   }
   g.lastRecheck = now.toISOString()
-  alerts.push(...(await reviewsStep(g)))
+  alerts.push(...(await watchersStep(g, now)))
   saveAll(cats, g, now)
   await notify(alerts)
 }
 
-/** What the hourly-ish schedule should do right now. */
-function due(now: Date, g: GlobalState): 'daily' | 'recheck' | undefined {
-  const today = day(now)
-  const dailyToday = g.lastDaily && day(new Date(g.lastDaily)) === today
-  if (!dailyToday) return localHour(now, s.timezone) >= s.dailyHour ? 'daily' : undefined
-  const recheckedToday = g.lastRecheck && g.lastRecheck > g.lastDaily!
-  if (!recheckedToday && now.getTime() - Date.parse(g.lastDaily!) >= s.recheckAfterHours * HOUR) return 'recheck'
-  return undefined
+async function reviews() {
+  const now = new Date()
+  const cats = loadAll()
+  const g = loadGlobal()
+  const alerts = await watchersStep(g, now)
+  // state first: a Slack hiccup must not make the next run report the same things again
+  saveAll(cats, g, now)
+  await notify(alerts)
 }
 
 const [mode = 'auto', arg, arg2] = process.argv.slice(2).filter(a => !a.startsWith('--'))
 const started = Date.now()
 switch (mode) {
   case 'auto': {
-    const what = due(new Date(), loadGlobal())
+    const what = due(new Date(), loadGlobal(), s, await watchList())
     output('ran', what ?? 'none')
     if (what === 'daily') await daily()
     else if (what === 'recheck') await recheck()
+    else if (what === 'reviews') await reviews()
     else log('nothing due')
     break
   }
   case 'due': {
     // GitHub Actions: decide once, then the fetch jobs and the merge all work from the same moment
     const asked = arg ?? 'auto'
-    const what = asked === 'auto' ? due(new Date(), loadGlobal()) ?? 'none' : asked
+    const what = asked === 'auto' ? due(new Date(), loadGlobal(), s, await watchList()) ?? 'none' : asked
     const n = Math.max(1, s.parallelJobs ?? 1)
     output('mode', what)
     output('run_at', new Date().toISOString())
@@ -189,12 +208,7 @@ switch (mode) {
     saveAll(cats, g, now)
     break
   }
-  case 'reviews': {
-    const now = new Date(), cats = loadAll(), g = loadGlobal()
-    await notify(await reviewsStep(g))
-    saveAll(cats, g, now)
-    break
-  }
+  case 'reviews': output('ran', 'reviews'); await reviews(); break
   case 'publish': {
     const now = new Date(), cats = loadAll(), g = loadGlobal()
     publish(cats, g, s, day(now))
