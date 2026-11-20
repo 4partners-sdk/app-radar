@@ -1,0 +1,101 @@
+# App Radar
+
+The web version of AppResearch. Every day around 09:00 Warsaw time a collector checks the App Store by category (Cleaners, VPN, Security), and a login-protected site shows the analytics for the last 90 days. Slack gets:
+
+- bans (apps removed from the App Store);
+- bad reviews of favorite apps;
+- a message when the collector fails.
+
+Everything runs on free tiers. This repository is public (unlimited Actions minutes) and holds only code; the database is in a private repository.
+
+```
+GitHub Actions in this repo (cron)                   private repo, `data` branch     Cloudflare Pages (login)
+decide → 12 parallel fetch jobs → apply   ─deploy key─►  state/*.json.enc   ──►   static site behind a password
+          (each its own IP)     (diff, save)             (encrypted, 1 commit)
+12:00 — removal recheck · weekly — subscription prices
+──► Slack: bans, bad reviews, failures
+```
+
+## How it works
+
+| What | Where |
+|---|---|
+| Collector (TypeScript, run by Node 24 directly — no build, no dependencies) | `collector/` |
+| Category rules: search terms, regexes, genres | `config/categories.json` |
+| Countries, favorites, review words, retention, run time | `config/settings.json` |
+| Site (Vite + Preact) | `site/` |
+| Site login (Pages Function, HTTP Basic Auth) | `functions/_middleware.js` |
+| Schedule and deploy | `.github/workflows/collect.yml` |
+| Database | the `data` branch of a private repository (`state/<category>.json.enc`, `state/global.json.enc`, AES-256-GCM with the `DATA_KEY` secret), read and written by `tools/data-repo.sh` |
+
+**Schedule.** The workflow runs at 07:05, 08:05, 11:05 and 12:05 UTC, and the collector decides what is due:
+- **full check** — if there hasn't been one today and it is 09:00 or later in Warsaw;
+- **removal recheck** — 3 hours after the full check;
+- **nothing** — in every other slot; such a run takes seconds.
+
+Two morning slots cover summer/winter time; 12:05 catches a recheck when the daily run started late. Each run is billed as at least a minute, so there are no more slots than needed.
+
+**What counts as a removal.** An app is removed when it is missing from all of its storefronts on two checks in a row, at least 3 hours apart. So a ban reaches Slack on the day it happens, around 12:00.
+
+**Ratings growth** (Trending, "Updates that worked") only counts storefronts the app was already in. An app found in a new storefront doesn't look like a jump in ratings. Release impact uses the actual number of days between checks, since checks aren't always daily.
+
+**Review alerts.** Apple's review feed publishes some reviews days after their date. Those are stored and shown on the site, but only reviews from the last 3 days go to Slack.
+
+**Retention.** Everything older than `retentionDays` (90 days) is dropped: events, history, removed apps, reviews.
+
+**Rate limits.** Apple documents the Search API as limited to [~20 calls per minute](https://performance-partners.apple.com/search-api), and from GitHub's shared runner IPs that is enforced: 429s at 2.25 s between requests, none at 3.4 s. So CI runs at one request per 3.4 s (`API_INTERVAL_MS`); after a 429 everything pauses for a minute and the pace drops further for the rest of the run.
+
+**Parallel jobs.** Apple's limit is per IP (measured: three runners at 3.4 s each, ~53 calls a minute together, no throttling). So the daily check is split: `decide` fixes what is due and the moment of the run; `parallelJobs` (12) fetch jobs each send their share of the requests (job i takes requests i, i+12, …) and upload their results; `apply` joins them, turns them into events, saves, deploys and posts to Slack. If a fetch job fails, its apps count as "not checked", never as removed. The plan is deterministic, so every job and the merge see the same list (the merge checks this).
+
+**Encryption.** The database and the fetch jobs' results (Actions artifacts, downloadable by anyone in a public repository) are encrypted with AES-256-GCM using the `DATA_KEY` secret (`openssl rand -base64 32`). In CI (`REQUIRE_ENCRYPTION`) nothing is ever written in the clear: without the key the run fails instead. Locally, without `DATA_KEY`, files stay plain JSON. Keep the key in a password manager: without it the database can't be read (the collector would have to start over).
+
+**Full search every day.** A daily check is every term in every storefront (~860 searches) plus every known app (~260 lookups, 150 apps each): ~1,100 requests, ~63 min on one runner, ~6 min on 12. Public repositories get unlimited Actions minutes, so nothing has to be cut. In a private repository (2,000 free minutes a month) set `searchRotationDays` to 3: known apps are still looked up daily, and the search for new ones is spread over 3 days.
+
+**Public repository, private data.** What anyone can see here: the code, `config/` (categories, search terms, favorites) and run logs, which only show counts. The fetch jobs' artifacts are encrypted. The database and its history live in a private repository: the workflow reaches it with a deploy key that has access to that one repository only (`DATA_REPO_KEY` secret). The repository variable `DATA_REPO` names it (default: `<owner>/app_reviewer`). GitHub turns schedules off in a public repository after 60 days without a commit, so the workflow adds an empty commit when the last one is 45 days old.
+
+## Commands
+
+```bash
+npm install                      # only needed for the site and the typecheck
+node collector/main.ts daily     # whole daily check on this machine (~10 min from a Mac)
+node collector/main.ts fetch 0 12 # one parallel job's share of the requests → out/shard-0.bin
+node collector/main.ts merge out # the rest of the daily check from all shards' results
+node collector/main.ts recheck   # recheck apps that went missing
+node collector/main.ts prices force   # re-read subscription prices
+node collector/main.ts reviews   # favorites' reviews
+node collector/main.ts publish   # rebuild the site's data files from the current db
+node collector/main.ts remeasure # measure every release again (after changing how impact is measured)
+node collector/selftest.ts       # logic checks, no network
+npm run dev                      # the site locally, on the data in ./data
+npm run typecheck
+npm test                         # collector logic + site login checks
+```
+
+- Without `SLACK_WEBHOOK_URL`, messages aren't sent but printed to the log (with `--verbose`).
+- `DATA_DIR` points the collector at another database folder.
+
+## Setup (once)
+
+All secrets and variables below go to this repository: Settings → Secrets and variables → Actions.
+
+0. **Encryption key.** `openssl rand -base64 32 | pbcopy` → secret `DATA_KEY` (and a copy in the password manager).
+1. **Data repository.** A private repository for the database (the variable `DATA_REPO`, default `<owner>/app_reviewer`). The first run creates its `data` branch; ours started from an import of the Mac app's data.
+   - `ssh-keygen -t ed25519 -N "" -C app-radar-data -f app-radar-data` makes a key pair.
+   - `app-radar-data.pub` → the data repository → Settings → Deploy keys → Add, with **Allow write access**.
+   - `app-radar-data` (the private half) → secret `DATA_REPO_KEY` in this repository. Then delete both files.
+2. **Slack.** You need an incoming webhook: api.slack.com/apps → Create App → Incoming Webhooks → Add to channel. Save the URL as the secret `SLACK_WEBHOOK_URL`.
+3. **Cloudflare Pages:**
+   - The `app-radar` project is created on the first deploy from Actions.
+   - Create an API token (My Profile → API Tokens) with the **Cloudflare Pages: Edit** permission and save it as the secret `CLOUDFLARE_API_TOKEN`.
+   - Save the account ID as the secret `CLOUDFLARE_ACCOUNT_ID`.
+4. **Login.** Every request to the site (pages, data files, preview deployments) goes through `functions/_middleware.js`, which asks for a login and password — the browser shows its standard sign-in box and remembers it. Credentials are a secret of the Pages project, not of the repo:
+   - Workers & Pages → `app-radar` → Settings → Variables and Secrets → Add → type **Secret**, name `BASIC_AUTH`, value `login:password`. For several people: `anna:pass1, oleg:pass2` (no commas inside passwords). Add it for both Production and Preview.
+   - Then redeploy: Actions → collect → Run workflow → mode `publish` (~2 min).
+   - Without the secret the site answers 503 — closed, not open.
+5. **`SITE_URL` variable.** The site address (`https://<project>.pages.dev`), so Slack messages link to the dashboard.
+6. **First run.** Actions → collect → Run workflow → mode `daily`. This also shows whether Apple answers requests from GitHub's servers.
+
+## Changing things
+
+- **Categories and search terms:** edit `config/categories.json`. The Cyrillic and CJK parts of the patterns match apps with Russian, Japanese and Korean names — keep them. After a big rule change, delete `state/<id>.json.enc` in the data repository's `data` branch: the next check builds a fresh baseline instead of a flood of false "new" apps.
+- **Favorites, countries, time, retention:** edit `config/settings.json`.

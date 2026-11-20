@@ -1,0 +1,19 @@
+{
+  "timezone": "Europe/Warsaw",
+  "dailyHour": 9,
+  "recheckAfterHours": 3,
+  "retentionDays": 90,
+  "countries": ["us", "gb", "de", "fr", "ru", "es", "it", "br", "jp", "kr", "tr", "ca", "au"],
+  "pricesTop": 200,
+  "pricesEveryDays": 7,
+  "searchRotationDays": 1,
+  "parallelJobs": 12,
+  "favorites": [
+    { "id": 1510944943, "name": "Cleanup: Phone Storage Cleaner" },
+    { "id": 6795911396, "name": "Sanary AI Cleaner" }
+  ],
+  "reviewMaxStars": 2,
+  "reviewWords": "refund, scam, charged, charge, cancel, unsubscribe, subscription, fraud, money back, crash, crashes, doesn't work, does not work, not working, deleted my, lost my, waste of money, rip off",
+  "riskyWords": "virus, antivirus, malware, boost, booster, speed up, battery, RAM, cooler, junk, cache, 100%, free forever, hack, iPhone, Apple",
+  "featureWords": "AI, widget, swipe, video, compress, contacts, iCloud, secret, password, VPN, live activity, shortcut"
+}

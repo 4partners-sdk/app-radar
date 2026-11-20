@@ -1,0 +1,23 @@
+{
+  "name": "appresearch-web",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "collect": "node collector/main.ts",
+    "dev": "vite site",
+    "build": "vite build site",
+    "preview": "vite preview site",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node collector/selftest.ts && node tests/auth.test.mjs"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "2.10.6",
+    "@types/node": "24.19.2",
+    "preact": "10.29.8",
+    "typescript": "5.9.3",
+    "vite": "7.3.7"
+  }
+}

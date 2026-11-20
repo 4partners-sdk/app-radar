@@ -1,0 +1,174 @@
+name: collect
+
+# Times are UTC. The collector decides what is due in Europe/Warsaw time (config/settings.json): the daily check
+# after 09:00, the removal recheck 3 h later. 07:05/08:05 cover summer/winter time for the daily check,
+# 11:05/12:05 the recheck (12:05 catches a late daily run).
+#
+# The daily check runs in three steps:
+#   decide — what is due, and the moment every later job dates things from
+#   fetch  — N parallel jobs send the App Store requests; Apple limits each IP to ~20 calls a minute, so N jobs
+#            finish N times sooner. Each uploads its results, encrypted, as an artifact.
+#   apply  — joins the results, turns them into events, saves the encrypted database, deploys the site, Slack.
+# Other modes (recheck, publish, reviews, prices) run in the apply job alone.
+#
+# The database is not in this repository: it lives in a private one (DATA_REPO, branch `data`), reached with a
+# deploy key (DATA_REPO_KEY secret) — see tools/data-repo.sh. This repository holds only code and can be public.
+on:
+  schedule:
+    - cron: '5 7 * * *'
+    - cron: '5 8 * * *'
+    - cron: '5 11 * * *'
+    - cron: '5 12 * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'auto | daily | recheck | prices | reviews | publish'
+        default: auto
+
+permissions:
+  # only to keep scheduled runs alive (see the last steps); the database is written with the deploy key
+  contents: write
+
+concurrency:
+  group: collect
+  cancel-in-progress: false
+
+env:
+  # the database and the jobs' results are written only encrypted (DATA_KEY secret)
+  REQUIRE_ENCRYPTION: 'true'
+  # Apple documents ~20 Search API calls a minute; from GitHub's shared IPs that is enforced
+  # (measured: 429s at 2.25 s spacing, none at 3.38 s), so every job runs at the pace that holds
+  API_INTERVAL_MS: '3400'
+  # the private repository with the database; by default <owner>/app_reviewer
+  DATA_REPO: ${{ vars.DATA_REPO || format('{0}/app_reviewer', github.repository_owner) }}
+
+jobs:
+  decide:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      mode: ${{ steps.due.outputs.mode }}
+      run_at: ${{ steps.due.outputs.run_at }}
+      shards: ${{ steps.due.outputs.shards }}
+      shard_count: ${{ steps.due.outputs.shard_count }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Restore data
+        env:
+          DATA_REPO_KEY: ${{ secrets.DATA_REPO_KEY }}
+        run: tools/data-repo.sh restore
+      - id: due
+        env:
+          DATA_KEY: ${{ secrets.DATA_KEY }}
+        run: node collector/main.ts due ${{ inputs.mode || 'auto' }}
+
+  fetch:
+    needs: decide
+    if: needs.decide.outputs.mode == 'daily'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.decide.outputs.shards) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Restore data
+        env:
+          DATA_REPO_KEY: ${{ secrets.DATA_REPO_KEY }}
+        run: tools/data-repo.sh restore
+      - name: Fetch
+        env:
+          DATA_KEY: ${{ secrets.DATA_KEY }}
+          RUN_AT: ${{ needs.decide.outputs.run_at }}
+        run: node collector/main.ts fetch ${{ matrix.shard }} ${{ needs.decide.outputs.shard_count }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: shard-${{ matrix.shard }}
+          path: out/
+          retention-days: 1
+          if-no-files-found: error
+
+  apply:
+    needs: [decide, fetch]
+    # runs even when a fetch job failed: its apps then count as "not checked", never as removed
+    if: always() && needs.decide.result == 'success' && needs.decide.outputs.mode != 'none'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      # the `data` branch of the private repository is the database: one commit of encrypted files,
+      # force-pushed after every run
+      - name: Restore data
+        env:
+          DATA_REPO_KEY: ${{ secrets.DATA_REPO_KEY }}
+        run: tools/data-repo.sh restore
+      - if: needs.decide.outputs.mode == 'daily'
+        uses: actions/download-artifact@v8
+        with:
+          pattern: shard-*
+          path: out
+          merge-multiple: true
+
+      - name: Collect
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SITE_URL: ${{ vars.SITE_URL }}
+          DATA_KEY: ${{ secrets.DATA_KEY }}
+          RUN_AT: ${{ needs.decide.outputs.run_at }}
+          MODE: ${{ needs.decide.outputs.mode }}
+        run: |
+          if [ "$MODE" = daily ]; then node collector/main.ts merge out; else node collector/main.ts "$MODE"; fi
+
+      - name: Save data
+        if: always()
+        env:
+          DATA_REPO_KEY: ${{ secrets.DATA_REPO_KEY }}
+        run: tools/data-repo.sh save
+
+      - name: Build site
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+
+      - name: Deploy to Cloudflare Pages
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PROJECT: ${{ vars.PAGES_PROJECT || 'app-radar' }}
+        run: |
+          # first run: create the Pages project (fails harmlessly once it exists)
+          npx --yes wrangler@4.157.0 pages project create "$PROJECT" --production-branch=main 2>/dev/null || true
+          npx --yes wrangler@4.157.0 pages deploy site/dist --project-name="$PROJECT" --branch=main --commit-dirty=true
+
+      # GitHub turns schedules off in a public repository after 60 days without a commit; the database is
+      # elsewhere, so nothing else commits here. An empty commit every ~45 days keeps the daily check running.
+      - name: Keep the schedule alive
+        if: github.event_name == 'schedule'
+        continue-on-error: true
+        run: |
+          age=$(( $(date +%s) - $(git log -1 --format=%ct) ))
+          [ "$age" -lt $(( 45 * 86400 )) ] && exit 0
+          git config user.name "app-radar"
+          git config user.email "app-radar@users.noreply.github.com"
+          git commit -q --allow-empty -m "Keep scheduled runs on"
+          git push -q origin "HEAD:$GITHUB_REF_NAME"
+
+      - name: Tell Slack the collector failed
+        if: failure()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          [ -z "$SLACK_WEBHOOK_URL" ] && exit 0
+          curl -sS -X POST -H 'Content-Type: application/json' \
+            --data "{\"text\":\"⚠️ App Radar: the collector failed — <${RUN_URL}|run log>\"}" "$SLACK_WEBHOOK_URL"
