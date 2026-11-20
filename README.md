@@ -28,12 +28,12 @@ decide → 12 parallel fetch jobs → apply   ─deploy key─►  state/*.json.
 | Schedule and deploy | `.github/workflows/collect.yml` |
 | Database | the `data` branch of a private repository (`state/<category>.json.enc`, `state/global.json.enc`, AES-256-GCM with the `DATA_KEY` secret), read and written by `tools/data-repo.sh` |
 
-**Schedule.** The workflow runs at 07:05, 08:05, 11:05 and 12:05 UTC, and the collector decides what is due:
+**Schedule.** The workflow runs every hour at :05, and the collector decides what is due:
 - **full check** — if there hasn't been one today and it is 09:00 or later in Warsaw;
-- **removal recheck** — 3 hours after the full check;
-- **nothing** — in every other slot; such a run takes seconds.
+- **removal recheck** — 3 hours after the last full check;
+- **nothing** — in every other hour; such a run takes seconds.
 
-Two morning slots cover summer/winter time; 12:05 catches a recheck when the daily run started late. Each run is billed as at least a minute, so there are no more slots than needed.
+**Refresh now.** The button in the site's header starts a full check right away (~7 min) through `functions/api/refresh.js`, behind the same login. Everyone with the site open sees it running, a second press while one runs does nothing, and open pages reload when the new data is published. The removal recheck follows 3 hours later as usual. Try the button locally with `MOCK_REFRESH=1 npm run dev`.
 
 **What counts as a removal.** An app is removed when it is missing from all of its storefronts on two checks in a row, at least 3 hours apart. So a ban reaches Slack on the day it happens, around 12:00.
 
@@ -92,8 +92,9 @@ All secrets and variables below go to this repository: Settings → Secrets and 
    - Workers & Pages → `app-radar` → Settings → Variables and Secrets → Add → type **Secret**, name `BASIC_AUTH`, value `login:password`. For several people: `anna:pass1, oleg:pass2` (no commas inside passwords). Add it for both Production and Preview.
    - Then redeploy: Actions → collect → Run workflow → mode `publish` (~2 min).
    - Without the secret the site answers 503 — closed, not open.
-5. **`SITE_URL` variable.** The site address (`https://<project>.pages.dev`), so Slack messages link to the dashboard.
-6. **First run.** Actions → collect → Run workflow → mode `daily`. This also shows whether Apple answers requests from GitHub's servers.
+5. **Refresh button.** A fine-grained GitHub token: github.com/settings/personal-access-tokens/new → Resource owner: the organization → Only select repositories: this one → Repository permissions → **Actions: Read and write**. Save it in the Pages project, next to `BASIC_AUTH`, as the secret `GITHUB_TOKEN` (Production and Preview). If this repository isn't `4partners-sdk/app-radar`, add a text variable `GITHUB_REPO` = `owner/name` too. Without the token the button is hidden; when it expires, the button says so — make a new one.
+6. **`SITE_URL` variable.** The site address (`https://<project>.pages.dev`), so Slack messages link to the dashboard.
+7. **First run.** Actions → collect → Run workflow → mode `daily`. This also shows whether Apple answers requests from GitHub's servers.
 
 ## Changing things
 

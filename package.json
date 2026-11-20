@@ -11,7 +11,7 @@
     "build": "vite build site",
     "preview": "vite preview site",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "node collector/selftest.ts && node tests/auth.test.mjs"
+    "test": "node collector/selftest.ts && node tests/auth.test.mjs && node tests/refresh.test.mjs"
   },
   "devDependencies": {
     "@preact/preset-vite": "2.10.6",

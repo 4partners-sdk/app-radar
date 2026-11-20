@@ -11,6 +11,7 @@ import { Removals } from './views/Removals.tsx'
 import { Insights } from './views/Insights.tsx'
 import { Prices } from './views/Prices.tsx'
 import { Reviews } from './views/Reviews.tsx'
+import { Refresh } from './refresh.tsx'
 
 export interface Ctx {
   index: Index
@@ -80,6 +81,7 @@ function App() {
             Last check: <b>{dateTime(index.lastDaily)}</b> ({ago(index.lastDaily)})<br />
             Next around {String(index.dailyHour).padStart(2, '0')}:00 · keeps {index.retentionDays} days
           </div>
+          <Refresh generatedAt={index.generatedAt} />
         </div>
       </header>
       <main>

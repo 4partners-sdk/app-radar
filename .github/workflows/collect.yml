@@ -1,8 +1,8 @@
 name: collect
 
-# Times are UTC. The collector decides what is due in Europe/Warsaw time (config/settings.json): the daily check
-# after 09:00, the removal recheck 3 h later. 07:05/08:05 cover summer/winter time for the daily check,
-# 11:05/12:05 the recheck (12:05 catches a late daily run).
+# Every hour; the collector decides what is due in Europe/Warsaw time (config/settings.json): the daily check
+# after 09:00, the removal recheck 3 h after the last daily check (also one started by "Refresh now" on the site).
+# Other hours do nothing and take seconds. A public repository has unlimited minutes, so slots cost nothing.
 #
 # The daily check runs in three steps:
 #   decide — what is due, and the moment every later job dates things from
@@ -15,10 +15,7 @@ name: collect
 # deploy key (DATA_REPO_KEY secret) — see tools/data-repo.sh. This repository holds only code and can be public.
 on:
   schedule:
-    - cron: '5 7 * * *'
-    - cron: '5 8 * * *'
-    - cron: '5 11 * * *'
-    - cron: '5 12 * * *'
+    - cron: '5 * * * *'
   workflow_dispatch:
     inputs:
       mode:
