@@ -1,6 +1,6 @@
 // `node tests/watchers.test.mjs` — checks of the watch list endpoint (functions/api/watchers.js) against fake GitHub
 // and App Store APIs.
-import { appId, onRequestGet, onRequestPost } from '../functions/api/watchers.js'
+import { appId, nameFromLink, onRequestGet, onRequestPost, storefrontOf } from '../functions/api/watchers.js'
 let failed = 0
 const check = (name, ok) => { if (!ok) failed++; console.log(`${ok ? '✓' : '✗'} ${name}`) }
 
@@ -10,7 +10,7 @@ const b64 = s => Buffer.from(s, 'utf8').toString('base64')
 const CONTENTS = 'https://api.github.com/repos/4partners-sdk/app_reviewer/contents/watchers.json'
 
 /** fake APIs: `file` is the stored list (undefined = no branch yet); records every call */
-function fake({ file, store = { 42424242: 'Cleaner Ü' }, putStatus = [], repoStatus = 200, contentsStatus, run = 'completed' } = {}) {
+function fake({ file, store = { 42424242: 'Cleaner Ü' }, putStatus = [], repoStatus = 200, contentsStatus, run = 'completed', apple = 200 } = {}) {
   const state = { file, sha: file ? 'v1' : undefined, branch: !!file }
   const calls = []
   globalThis.fetch = async (url, init = {}) => {
@@ -19,6 +19,7 @@ function fake({ file, store = { 42424242: 'Cleaner Ü' }, putStatus = [], repoSt
     calls.push({ url, method: init.method ?? 'GET', body, headers: init.headers })
     const res = (status, data) => new Response(data === undefined ? null : JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } })
     if (url.startsWith('https://itunes.apple.com/lookup')) {
+      if (apple !== 200) return res(apple, {})
       const id = Number(new URL(url).searchParams.get('id'))
       return res(200, { results: store[id] ? [{ trackId: id, trackName: store[id], artistName: 'Dev', artworkUrl100: 'https://icon' }] : [] })
     }
@@ -61,6 +62,9 @@ const call = async (p, b) => { const r = await p; return { status: r.status, bod
 check('id from a store link', appId('https://apps.apple.com/us/app/some-cleaner/id1234567890?l=ru') === 1234567890)
 check('id from "id…" and digits', appId('id9876543210') === 9876543210 && appId(' 9876543210 ') === 9876543210)
 check('no id in junk', appId('cleanup') === undefined && appId('https://example.com/12') === undefined)
+check('storefront from a link', storefrontOf('https://apps.apple.com/pl/app/x/id1234567') === 'pl' && storefrontOf('1234567') === undefined)
+check('placeholder name from the link', nameFromLink('https://apps.apple.com/pl/app/flixclean-app/id1234567', 1234567) === 'Flixclean App'
+  && nameFromLink('1234567', 1234567) === 'App 1234567')
 
 let r = await call(onRequestGet({ env: { GITHUB_TOKEN: 'actions-token' } }))
 check('no DATA_REPO_TOKEN → 503, read-only on the site', r.status === 503 && r.body.configured === false)
@@ -109,6 +113,17 @@ check('add while a run is going: saved, no second run', r.status === 200 && f.st
 f = fake({ file: [] })
 r = await call(onRequestPost({ request: post({ op: 'add', app: '99999999' }), env }))
 check('unknown app → 404 with a message, nothing saved', r.status === 404 && r.body.error.includes('No app with id 99999999') && !f.calls.some(c => c.method === 'PUT'))
+
+f = fake({ file: [] })
+r = await call(onRequestPost({ request: post({ op: 'add', app: 'https://apps.apple.com/pl/app/x/id42424242' }), env }))
+const looked = f.calls.filter(c => c.url.startsWith('https://itunes')).map(c => new URL(c.url).searchParams.get('country'))
+check("looks in the link's storefront first, at most two lookups", looked[0] === 'pl' && looked.length === 1)
+
+f = fake({ file: [], apple: 403 })
+r = await call(onRequestPost({ request: post({ op: 'add', app: 'https://apps.apple.com/pl/app/flixclean-app/id42424242' }), env }))
+check('Apple refuses (403): added anyway with the name from the link, marked unverified', r.status === 200 && r.body.unverified === true
+  && f.state.file[0].name === 'Flixclean App' && f.state.file[0].id === 42424242
+  && f.calls.filter(c => c.url.startsWith('https://itunes')).length === 2)
 r = await call(onRequestPost({ request: post({ op: 'add', app: 'cleaner' }), env }))
 check('not a link or id → 400', r.status === 400 && r.body.error.includes('App Store link'))
 

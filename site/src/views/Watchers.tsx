@@ -62,11 +62,12 @@ export function Watchers(ctx: Ctx) {
     setBusy('add')
     setNote(undefined)
     try {
-      const r = await addApp(what, ctx.index.countries)
+      const r = await addApp(what)
       if (!r.error) setInput('')
-      answer(r, r.started
+      const name = r.unverified ? ' The App Store didn\'t answer just now, so its name and icon show after that check.' : ''
+      answer(r, (r.started
         ? 'Added. Its first check is running — this page updates by itself in a few minutes.'
-        : 'Added. Its first check comes with the next run, within the hour.')
+        : 'Added. Its first check comes with the next run, within the hour.') + name)
     } catch (err) {
       setNote({ text: (err as Error).message, bad: true })
     }

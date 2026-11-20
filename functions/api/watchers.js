@@ -5,7 +5,7 @@
 // GITHUB_TOKEN, if set, only starts an app's first check right away.
 //
 // GET  → { configured, apps }
-// POST { op: 'add', app: '<App Store link or id>', countries?: ['us', …] } → { configured, apps, started }
+// POST { op: 'add', app: '<App Store link or id>' } → { configured, apps, started, unverified }
 // POST { op: 'remove', id } → { configured, apps }
 
 import { GitHubError, dataRepo, dispatch, failed, fromBase64, fromThisSite, gh, isActive, json, latestRun, login, toBase64 } from '../../server/github.js'
@@ -42,20 +42,24 @@ export async function onRequestPost({ request, env }) {
     if (body?.op === 'add') {
       const id = appId(body.app)
       if (!id) return json({ configured: true, error: 'Paste an App Store link (…/id1234567890) or an app id' }, 400)
-      const countries = storefronts(body.countries)
-      const found = await findApp(id, countries)
-      if (!found) return json({ configured: true, error: `No app with id ${id} in the App Store (${countries.map(c => c.toUpperCase()).join(' ')})` }, 404)
-      const entry = { id, name: found.trackName, developer: found.artistName, icon: found.artworkUrl100, addedAt: new Date().toISOString(), addedBy: login(request) }
+      const where = [...new Set([storefrontOf(body.app), 'us'].filter(Boolean))]
+      const found = await findApp(id, where)
+      if (found === null) return json({ configured: true, error: `No app with id ${id} in the App Store (${where.map(c => c.toUpperCase()).join(' ')})` }, 404)
+      // Apple often refuses Cloudflare's shared addresses: add it anyway, the collector's first check fills in the rest
+      const entry = found
+        ? { id, name: found.trackName, developer: found.artistName, icon: found.artworkUrl100 }
+        : { id, name: nameFromLink(body.app, id) }
+      Object.assign(entry, { addedAt: new Date().toISOString(), addedBy: login(request) })
       let full = false
       const apps = await change(env, list => {
         if (list.some(a => a.id === id)) return null
         if (list.length >= MAX_APPS) { full = true; return null }
         return [...list, entry]
-      }, () => `Watch ${found.trackName}`)
+      }, () => `Watch ${entry.name}`)
       if (full) return json({ configured: true, apps, error: `The list holds up to ${MAX_APPS} apps — remove one first` }, 409)
       // its first check right away when the collector is idle; otherwise the next hourly run does it
       const started = await startCheck(env)
-      return json({ configured: true, apps, started })
+      return json({ configured: true, apps, started, ...(found ? {} : { unverified: true }) })
     }
     if (body?.op === 'remove') {
       const id = Number(body.id)
@@ -77,21 +81,36 @@ export function appId(input) {
   return m ? Number(m[1]) : undefined
 }
 
-/** the storefronts the site watches, US first: an app is looked for there until one lists it */
-function storefronts(list) {
-  const cs = [...new Set((Array.isArray(list) ? list : []).map(c => String(c).toLowerCase()).filter(c => /^[a-z]{2}$/.test(c)))].slice(0, 30)
-  if (!cs.length) return ['us']
-  return cs.includes('us') ? ['us', ...cs.filter(c => c !== 'us')] : cs
+/** "https://apps.apple.com/pl/app/…/id1" → "pl" */
+export function storefrontOf(input) {
+  return /apps\.apple\.com\/([a-z]{2})\//i.exec(String(input ?? ''))?.[1].toLowerCase()
 }
 
+/** a name to show until the first check: the link's slug ("flixclean-app" → "Flixclean App") */
+export function nameFromLink(input, id) {
+  let slug = /\/app\/([^/?#]+)\/id\d/.exec(String(input ?? ''))?.[1] ?? ''
+  try { slug = decodeURIComponent(slug) } catch { /* keep it as it is */ }
+  const words = slug.split('-').filter(Boolean)
+  return words.length ? words.map(w => w[0].toUpperCase() + w.slice(1)).join(' ') : `App ${id}`
+}
+
+/** The app as the App Store lists it; null = the App Store answered and has no such app; undefined = no answer. */
 async function findApp(id, countries) {
+  let answered = false
   for (const c of countries) {
-    const r = await fetch(`https://itunes.apple.com/lookup?id=${id}&country=${c}&entity=software`)
-    if (!r.ok) throw new Error(`The App Store answered ${r.status}, try again in a minute`)
-    const app = (await r.json()).results?.find(x => x.trackId === id && x.trackName)
-    if (app) return app
+    try {
+      const r = await fetch(`https://itunes.apple.com/lookup?id=${id}&country=${c}&entity=software`, {
+        headers: { Accept: 'application/json', 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15' },
+      })
+      if (!r.ok) continue
+      answered = true
+      const app = (await r.json()).results?.find(x => x.trackId === id && x.trackName)
+      if (app) return app
+    } catch {
+      // network trouble: same as no answer
+    }
   }
-  return undefined
+  return answered ? null : undefined
 }
 
 async function startCheck(env) {

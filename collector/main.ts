@@ -70,7 +70,10 @@ async function watchersStep(g: GlobalState, now: Date): Promise<string[]> {
   g.watchers = list
   g.lastReviews = now.toISOString()
   const notices = await checkWatched(list, g, s.countries, now)
-  const texts = [watchText(notices, s.timezone, site), ...reviewsText(await readReviews(g, s, list))]
+  // names as the App Store lists them: an app added while Apple didn't answer the site has a placeholder
+  const named = (a: WatchedApp) => ({ ...a, name: g.watch?.[a.id]?.name ?? a.name })
+  for (const x of notices) x.app = named(x.app)
+  const texts = [watchText(notices, s.timezone, site), ...reviewsText(await readReviews(g, s, list.map(named)))]
   return texts.filter((t): t is string => !!t)
 }
 
