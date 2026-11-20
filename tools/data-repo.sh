@@ -16,7 +16,11 @@ if [ "$cmd" = save ] && [ ! -d data/state ]; then echo "nothing to save"; exit 0
 auth=$(printf 'x-access-token:%s' "$DATA_REPO_TOKEN" | base64 | tr -d '\n')
 # Actions hides the secret itself in logs, not its base64 form
 [ "${GITHUB_ACTIONS:-}" = true ] && echo "::add-mask::$auth"
-export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader GIT_CONFIG_VALUE_0="Authorization: Basic $auth"
+# actions/checkout leaves this repository's own token in the same setting; git would send both and GitHub
+# rejects a request with two Authorization headers. An empty value first clears the list, then ours is the only one.
+export GIT_CONFIG_COUNT=2
+export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader GIT_CONFIG_VALUE_0=
+export GIT_CONFIG_KEY_1=http.https://github.com/.extraheader GIT_CONFIG_VALUE_1="Authorization: Basic $auth"
 export GIT_TERMINAL_PROMPT=0
 # DATA_REPO_URL: another remote for tests
 url=${DATA_REPO_URL:-https://github.com/${DATA_REPO}.git}
