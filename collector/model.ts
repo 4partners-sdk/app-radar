@@ -62,6 +62,8 @@ export interface Settings {
   parallelJobs?: number
   /** how often the watched apps' reviews and presence are read (the daily check reads them too) */
   watchEveryHours?: number
+  /** who a watched app's removal pings in Slack: "channel" (default), "here" or "" (nobody) */
+  watchAlarm?: string
   reviewMaxStars: number
   reviewWords: string
   riskyWords: string

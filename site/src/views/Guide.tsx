@@ -39,7 +39,7 @@ export function Guide(ctx: Ctx) {
           <ul>
             <li>Every day it finds every app in our categories — <b>{cats}</b> — in {ix.countries.length} storefronts ({ix.countries.map(c => c.toUpperCase()).join(' ')}) and records ratings, versions, prices and where each app is live.</li>
             <li>From the difference between checks it shows what happened: new apps, updates, apps that took off, and apps removed from the App Store (bans).</li>
-            <li>It sends Slack alerts for removals and for bad reviews of the apps on the <b>watch list</b> (the {tab('watchers', 'Watchers')} tab).</li>
+            <li>It sends Slack alerts: a short daily count of removals per category, and for the apps on the <b>watch list</b> (the {tab('watchers', 'Watchers')} tab) a loud alarm when one is removed plus every new bad review.</li>
             <li>History is kept for {ix.retentionDays} days. The category selector at the top left switches between categories; every tab except Watchers and this guide shows the selected one.</li>
           </ul>
         </Section>
@@ -77,7 +77,7 @@ export function Guide(ctx: Ctx) {
 
         <Section id="watchers" title="Watchers">
           <ul>
-            <li>The apps whose <b>bad reviews</b> and <b>removals</b> go to Slack — our own apps, or anyone's we want to follow closely. Up to 25.</li>
+            <li>The apps whose <b>bad reviews</b> and <b>removals</b> go to Slack — our own apps, or anyone's we want to follow closely. Up to 25. A watched app's removal is an alarm that pings the whole channel.</li>
             <li><b>Add:</b> paste an App Store link (or just the id — the digits after <code>id</code> in the link) and press Add. Its first check starts right away when nothing else is running, otherwise with the next hourly run. If the App Store doesn't answer at that moment, the app shows a temporary name until that check.</li>
             <li><b>Remove:</b> the Remove button next to the app. Anyone with the site login can add and remove; the list shows who added what.</li>
             <li>The <b>first check</b> only learns where the app is live and remembers its current reviews, so adding an app never floods Slack with old ones. From then on every new bad review is sent.</li>
@@ -89,16 +89,16 @@ export function Guide(ctx: Ctx) {
 
         <Section id="slack" title="Slack alerts">
           <dl class="guide-dl">
-            <dt>🚫 Category: removed from the App Store</dt>
-            <dd>After the daily check or the recheck: apps of a category that disappeared, the biggest first, with their ratings, storefronts and when they were last seen. Tags: <i>whole developer removed</i>, <i>removal wave</i>.</dd>
-            <dt>👀 Watched apps</dt>
-            <dd>🚫 removed from the App Store · 🌍 no longer in some countries (still live elsewhere) · ✅ back in the App Store.</dd>
+            <dt>🚨 Watched app removed</dt>
+            <dd>The loud one: it pings the whole channel (@channel), one message per app. A red bar — the app is gone from the App Store; an amber bar — it was removed in some countries and is still live in others. When it comes back, a quiet ✅ message follows.</dd>
+            <dt>🚫 Removed from the App Store</dt>
+            <dd>After the daily check or the recheck: one short message with how many apps each category lost and when they disappeared. Which apps they were — and tags like <i>whole developer removed</i> or <i>removal wave</i> — is on the {tab('removals', 'Removals')} tab; the message links there.</dd>
             <dt>💬 New bad reviews</dt>
             <dd>Bad reviews of watched apps, with the reasons and links to reply in App Store Connect or open the App Store.</dd>
             <dt>⚠️ The collector failed</dt>
             <dd>A run broke; the message links to its log. If the same cause repeats every hour, it is sent once a day.</dd>
           </dl>
-          <p class="dim">Want to see what they look like? <a class="link" href={`${REPO}/actions/workflows/slack-test.yml`} target="_blank" rel="noreferrer">Actions → slack-test → Run workflow</a> sends one of each, marked TEST.</p>
+          <p class="dim">Want to see what they look like? <a class="link" href={`${REPO}/actions/workflows/slack-test.yml`} target="_blank" rel="noreferrer">Actions → slack-test → Run workflow</a> sends one of each, marked TEST (without pinging anyone).</p>
         </Section>
 
         <Section id="words" title="What the words mean">

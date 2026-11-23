@@ -35,7 +35,8 @@ export async function loadWatchList(): Promise<WatchedApp[]> {
 }
 
 export type WatchNoticeKind = 'removed' | 'pulled' | 'back'
-export interface WatchNotice { kind: WatchNoticeKind; app: WatchedApp; countries?: string[]; since?: string; lastSeen?: string }
+/** countries: where it was removed from (pulled), was live (removed) or is back (back); live: where it still is (pulled) */
+export interface WatchNotice { kind: WatchNoticeKind; app: WatchedApp; countries?: string[]; live?: string[]; since?: string; lastSeen?: string }
 
 /** One check's lookups: storefront → the watched ids it lists. A storefront whose lookup failed is left out. */
 export type Presence = Map<string, Set<number>>
@@ -82,14 +83,14 @@ export function updateWatch(list: WatchedApp[], watch: Record<string, WatchState
           gone.push(c)
         }
       }
-      if (gone.length) out.push({ kind: 'pulled', app, countries: gone })
       st.countries = [...live].sort()
+      if (gone.length) out.push({ kind: 'pulled', app, countries: gone, live: st.countries })
     } else if (checkedLive.length && !st.removedAt) {
       st.missing = (st.missing ?? 0) + 1
       st.missingSince ??= now
       if (st.missing >= 2) {
         st.removedAt = now
-        out.push({ kind: 'removed', app, since: st.missingSince, lastSeen: st.lastSeen })
+        out.push({ kind: 'removed', app, countries: st.countries, since: st.missingSince, lastSeen: st.lastSeen })
       }
     }
   }

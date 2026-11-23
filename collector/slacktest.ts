@@ -1,15 +1,17 @@
 // `node collector/slacktest.ts` — sends one sample of each kind of Slack alert, marked TEST, through the same
-// formatters the real alerts use: a bad review of a watched app, a removal wave in a category, a watched app
-// removed from the App Store. Made-up apps, no data involved. Run by hand: Actions → slack-test.
+// formatters the real alerts use: a bad review of a watched app, the day's removals in the categories, a watched app
+// removed from the App Store and one removed in some countries. Made-up apps, no data involved. The alarms show
+// @channel as plain text, so a test doesn't wake everyone. Run by hand: Actions → slack-test.
 // Without SLACK_WEBHOOK_URL (locally) the messages are printed instead.
 import type { App, WatchEvent } from './model.ts'
-import { post, removalsText, reviewsText, watchText } from './slack.ts'
+import { type Message, post, removalsSummary, reviewsText, watchMessages } from './slack.ts'
 import { settings } from './store.ts'
 
 const s = settings()
 const site = process.env.SITE_URL
 const ago = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString()
-const test = (text: string) => `🧪 *TEST — not a real alert*\n${text}`
+const TEST = '🧪 *TEST — not a real alert*'
+const test = (m: Message): Message => typeof m === 'string' ? `${TEST}\n${m}` : { ...m, text: `${TEST}\n${m.text}` }
 
 // 1. a bad review of a watched app
 const [review] = reviewsText([{
@@ -22,33 +24,25 @@ const [review] = reviewsText([{
   },
 }])
 
-// 2. a removal wave in a category: 6 removals in 24 h, three of them one developer's whole catalogue
-const apps: Record<string, App> = {}
-const events: WatchEvent[] = []
-const removed = [
-  ['Example Storage Cleaner', 'Example Studio Ltd', 18_400, true],
-  ['Example Photo Cleaner', 'Example Studio Ltd', 7_200, true],
-  ['Example Contacts Cleaner', 'Example Studio Ltd', 950, true],
-  ['Example Phone Booster', 'Sample Apps LLC', 3_100, false],
-  ['Example Junk Remover', 'Demo Soft', 410, false],
-  ['Example Smart Clean', 'Test Mobile Inc', 35, false],
-] as const
-removed.forEach(([name, developer, ratings, wiped], i) => {
-  const id = 1000000010 + i
-  const url = `https://apps.apple.com/app/id${id}`
-  apps[id] = {
-    id, name, developer, url, genre: 'Utilities', firstSeen: ago(24 * 60), lastSeen: ago(26), missingSince: ago(5),
-    countries: ['us', 'gb', 'de'], byCountry: {}, ratings, rating: 4.2, growth: [], removedAt: ago(1),
+// 2. the day's removals in the categories: counts and when
+let id = 1000000010
+const category = (name: string, count: number) => {
+  const apps: Record<string, App> = {}
+  const events: WatchEvent[] = []
+  for (let i = 0; i < count; i++, id++) {
+    apps[id] = { id, name: `Example ${name} app ${i + 1}`, developer: 'Example Ltd', url: '', genre: 'Utilities', firstSeen: ago(900),
+      lastSeen: ago(24), missingSince: ago(1), countries: ['us'], byCountry: {}, ratings: 0, rating: 0, growth: [], removedAt: ago(1) }
+    events.push({ date: ago(1), kind: 'removed', appId: id, name: apps[id].name, developer: 'Example Ltd', url: '' })
   }
-  events.push({
-    date: ago(1), kind: 'removed', appId: id, name, developer, url, countries: ['us', 'gb', 'de'],
-    note: [...(wiped ? ['developer wiped (3 apps)'] : []), 'sweep (6 removed in 24h)'].join(' · '),
-  })
-})
-const wave = removalsText('Cleaners', events, apps, s.timezone, site)
+  return { category: name, events, apps }
+}
+const removals = removalsSummary([category('Cleaners', 2), category('VPN', 7), category('Security', 3)], s.timezone, site, 'cleaners')
 
-// 3. a watched app removed from the App Store
-const watch = watchText([{ kind: 'removed', app: { id: 1000000001, name: 'Example Cleaner' }, lastSeen: ago(6), since: ago(3) }], s.timezone, site)
+// 3–4. a watched app removed from the App Store, another removed in some countries — the loud ones
+const alarms = watchMessages([
+  { kind: 'removed', app: { id: 1000000001, name: 'Example Cleaner' }, countries: ['us', 'gb', 'de'], lastSeen: ago(6), since: ago(3) },
+  { kind: 'pulled', app: { id: 1000000002, name: 'Example VPN' }, countries: ['ru'], live: ['us', 'gb', 'de'] },
+], s.timezone, site, '`@channel` ')
 
-for (const text of [review, wave, watch]) await post(test(text!))
-console.log('sent 3 test messages')
+for (const m of [review, removals!, ...alarms]) await post(test(m))
+console.log(`sent ${2 + alarms.length} test messages`)

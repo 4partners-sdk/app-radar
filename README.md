@@ -41,7 +41,9 @@ decide → 12 parallel fetch jobs → apply   ──token────►  state/
 
 **Guide.** The site's Guide tab explains every tab, the Slack alerts and the terms for the team, in plain words (`site/src/views/Guide.tsx`) — update it along with the features.
 
-**Test alerts.** Actions → `slack-test` → Run workflow sends one sample of each alert to Slack, marked TEST: a bad review, a removal wave, a watched app removed. Made-up apps, same formatting code as the real alerts (`collector/slacktest.ts`).
+**Slack.** After the daily check and the recheck, one short message counts each category's removals and says when they happened; the apps themselves are on the site's Removals tab. A watched app's removal is different: a loud alarm, one message per app, that pings the channel (`watchAlarm` in `config/settings.json`: `channel`, `here`, or `""` for nobody) — red when it is gone from the App Store, amber when only from some countries. New bad reviews of watched apps follow.
+
+**Test alerts.** Actions → `slack-test` → Run workflow sends one sample of each alert to Slack, marked TEST and without pinging anyone: a bad review, the removals count, a watched app removed, a watched app removed in one country. Made-up apps, same formatting code as the real alerts (`collector/slacktest.ts`).
 
 **What counts as a removal.** An app is removed when it is missing from all of its storefronts on two checks in a row, at least 3 hours apart. So a ban reaches Slack on the day it happens, around 12:00.
 

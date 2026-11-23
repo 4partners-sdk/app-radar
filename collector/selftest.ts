@@ -9,7 +9,7 @@ import { type Hit, type Job, type Listing, buildPlan, shareOf } from './plan.ts'
 import type { CategoryState, Settings, StoreApp } from './model.ts'
 import { parseInApp, period, plan, priceNumber, isTrial } from './prices.ts'
 import { parseFeed, reasons } from './reviews.ts'
-import { watchText } from './slack.ts'
+import { mentionOf, removalsSummary, watchMessages } from './slack.ts'
 import { type Presence, parseList, updateWatch } from './watchers.ts'
 import { categories } from './store.ts'
 import { DAY, HOUR, hasWord } from './util.ts'
@@ -173,9 +173,34 @@ check('whole words: AI not in email', !hasWord('Fixed email', 'AI') && hasWord('
   check('watch: back in that storefront → reported', x.length === 1 && x[0].kind === 'back' && x[0].countries?.join() === 'us' && !watch[7].pulled?.us)
   x = updateWatch(list, watch, new Map(), at(27))
   check('watch: no storefront answered → nothing changes', !x.length && !watch[7].missing)
-  const text = watchText([{ kind: 'removed', app, since: at(3), lastSeen: at(0) }, { kind: 'pulled', app: { id: 8, name: 'A & B' }, countries: ['ru', 'cn'] }], 'Europe/Warsaw', 'https://radar.example/')
-  check('watch: Slack text', text!.includes('🚫 <https://apps.apple.com/app/id7|Mine> — removed from the App Store · gone between')
-    && text!.includes('A &amp; B> — no longer in RU CN') && text!.includes('<https://radar.example/#/all/watchers|'))
+  const msgs = watchMessages([
+    { kind: 'removed', app, countries: ['gb', 'us'], since: at(3), lastSeen: at(0) },
+    { kind: 'pulled', app: { id: 8, name: 'A & B' }, countries: ['ru', 'cn'], live: ['us'] },
+    { kind: 'back', app, countries: ['us'] },
+  ], 'Europe/Warsaw', 'https://radar.example/', mentionOf('channel'))
+  const [removed, pulled, back] = msgs as { text: string; details: string; color: string }[]
+  check('watch alarm: removal pings the channel, red, one message per app', msgs.length === 3 && removed.text.startsWith('<!channel> 🚨')
+    && removed.text.includes('REMOVED FROM THE APP STORE: Mine') && removed.color === '#E01E5A'
+    && removed.details.includes('<https://apps.apple.com/app/id7|Mine> is gone from every storefront it was live in (GB US)')
+    && removed.details.includes('<https://radar.example/#/all/watchers|'))
+  check('watch alarm: removed in some countries pings too, amber, says where it still is', pulled.text.startsWith('<!channel> 🚨 *WATCHED APP REMOVED IN RU CN: A &amp; B*')
+    && pulled.details.includes('still live in US') && pulled.color === '#F2A100')
+  check('watch alarm: back in the store is quiet', !back.text.includes('<!') && back.text.startsWith('✅'))
+  check('watch alarm: who it pings is a setting', mentionOf('here') === '<!here> ' && mentionOf('') === '' && mentionOf(undefined) === '<!channel> ')
+  const rm = (id: number, seen: number, gone: number) => ({
+    ev: { date: at(gone), kind: 'removed' as const, appId: id, name: `A${id}`, developer: 'D', url: 'u' },
+    app: { ...blank(), id, lastSeen: at(seen), missingSince: at(gone) },
+  })
+  const vpn = [rm(1, 0, 3), rm(2, 1, 4)], cl = [rm(3, 2, 3)]
+  const summary = removalsSummary([
+    { category: 'VPN', events: vpn.map(x => x.ev), apps: Object.fromEntries(vpn.map(x => [x.app.id, x.app])) },
+    { category: 'Security', events: [], apps: {} },
+    { category: 'Cleaners', events: cl.map(x => x.ev), apps: Object.fromEntries(cl.map(x => [x.app.id, x.app])) },
+  ], 'UTC', 'https://radar.example', 'vpn')
+  check('bans: one message, counts and when per category, no app list', summary === '🚫 *Removed from the App Store: 3 apps*\n'
+    + '• *VPN* — 2 apps · gone between 20 Nov, 00:00–04:00\n• *Cleaners* — 1 app · gone between 20 Nov, 02:00–03:00\n'
+    + '<https://radar.example/#/vpn/removals|See which apps>')
+  check('bans: nothing removed → no message', removalsSummary([{ category: 'VPN', events: [], apps: {} }], 'UTC') === undefined)
   check('watch list: junk entries are dropped', parseList('{"apps":[{"id":1,"name":"A"},{"id":"2"},null,{"name":"B"}]}').length === 1)
 }
 

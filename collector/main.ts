@@ -21,7 +21,7 @@ import { scanPrices } from './prices.ts'
 import { publish } from './publish.ts'
 import { readReviews } from './reviews.ts'
 import { seed } from './seed.ts'
-import { post, removalsText, reviewsText, watchText } from './slack.ts'
+import { type Message, mentionOf, post, removalsSummary, reviewsText, watchMessages } from './slack.ts'
 import { DATA, categories, loadCategory, loadGlobal, prune, pruneGlobal, saveCategory, saveGlobal, settings } from './store.ts'
 import { DAY, HOUR, dayNumber, localHour, log } from './util.ts'
 import { checkWatched, loadWatchList } from './watchers.ts'
@@ -35,7 +35,7 @@ function output(key: string, value: string) {
   if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${value}\n`)
 }
 
-async function notify(texts: (string | undefined)[]) {
+async function notify(texts: (Message | undefined)[]) {
   for (const t of texts) {
     if (!t) continue
     try { await post(t) } catch (e) { console.error('slack:', (e as Error).message); process.exitCode = 1 }
@@ -53,6 +53,12 @@ function saveAll(cats: { c: Category; cs: CategoryState }[], g: GlobalState, now
   publish(cats, g, s, day(now))
 }
 
+type Removals = { id: string; category: string; events: WatchEvent[]; apps: CategoryState['apps'] }[]
+
+/** One short message for the categories' removals: counts and when; the link opens the first category's Removals. */
+const removalsMessage = (r: Removals) =>
+  removalsSummary(r, s.timezone, site, r.find(x => x.events.some(e => e.kind === 'removed'))?.id)
+
 /** The watch list, or undefined when it can't be read (the run goes on without it). */
 async function watchList(): Promise<WatchedApp[] | undefined> {
   try {
@@ -64,7 +70,7 @@ async function watchList(): Promise<WatchedApp[] | undefined> {
 }
 
 /** The watched apps: removals and new bad reviews, as Slack messages. */
-async function watchersStep(g: GlobalState, now: Date): Promise<string[]> {
+async function watchersStep(g: GlobalState, now: Date): Promise<Message[]> {
   const list = await watchList()
   if (!list) return ['⚠️ *App Radar: couldn\'t read the watch list* — removals and reviews of the watched apps were not checked this time.']
   g.watchers = list
@@ -73,8 +79,7 @@ async function watchersStep(g: GlobalState, now: Date): Promise<string[]> {
   // names as the App Store lists them: an app added while Apple didn't answer the site has a placeholder
   const named = (a: WatchedApp) => ({ ...a, name: g.watch?.[a.id]?.name ?? a.name })
   for (const x of notices) x.app = named(x.app)
-  const texts = [watchText(notices, s.timezone, site), ...reviewsText(await readReviews(g, s, list.map(named)))]
-  return texts.filter((t): t is string => !!t)
+  return [...watchMessages(notices, s.timezone, site, mentionOf(s.watchAlarm)), ...reviewsText(await readReviews(g, s, list.map(named)))]
 }
 
 /** RUN_AT: the moment the run started — every parallel job and the merge plan and date things from it */
@@ -84,7 +89,7 @@ const runAt = () => (process.env.RUN_AT ? new Date(process.env.RUN_AT) : new Dat
 async function finishDaily(cats: { c: Category; cs: CategoryState }[], g: GlobalState, jobs: Job[], results: ShardResult[], now: Date) {
   const { hits, listings } = mergeResults(results)
   const duration = (Date.now() - now.getTime()) / 1000
-  const alerts: (string | undefined)[] = []
+  const removals: Removals = []
   const failures: string[] = []
   let ok = 0
   for (const x of cats) {
@@ -93,7 +98,7 @@ async function finishDaily(cats: { c: Category; cs: CategoryState }[], g: Global
     if (run.failed) { failures.push(`${x.c.name}: ${run.error}`); continue }
     ok++
     log(`${x.c.name}: ${run.active} active`, run.counts, run.error ?? '')
-    if (!run.baseline) alerts.push(removalsText(x.c.name, events, x.cs.apps, s.timezone, site))
+    if (!run.baseline) removals.push({ id: x.c.id, category: x.c.name, events, apps: x.cs.apps })
   }
   if (ok) g.lastDaily = now.toISOString()
   const prices = applyPrices(cats, jobs, hits, now)
@@ -101,7 +106,8 @@ async function finishDaily(cats: { c: Category; cs: CategoryState }[], g: Global
   if (prices.read) g.lastPrices = now.toISOString()
   // state first: a crash in the slower steps below must not lose the check
   saveAll(cats, g, now)
-  alerts.push(...(await watchersStep(g, now)))
+  // a watched app's alarm first, then the categories' removals
+  const alerts: (Message | undefined)[] = [...(await watchersStep(g, now)), removalsMessage(removals)]
   saveAll(cats, g, now)
   if (failures.length) alerts.push(`⚠️ *App Radar: the check failed*\n${failures.join('\n')}`)
   await notify(alerts)
@@ -153,14 +159,14 @@ async function recheck() {
   const now = new Date()
   const cats = loadAll()
   const g = loadGlobal()
-  const alerts: (string | undefined)[] = []
+  const removals: Removals = []
   for (const x of cats) {
     if (!x.c.enabled) continue
     const { events } = await recheckCategory(x.c, x.cs, s.countries, now)
-    alerts.push(removalsText(x.c.name, events, x.cs.apps, s.timezone, site))
+    removals.push({ id: x.c.id, category: x.c.name, events, apps: x.cs.apps })
   }
   g.lastRecheck = now.toISOString()
-  alerts.push(...(await watchersStep(g, now)))
+  const alerts = [...(await watchersStep(g, now)), removalsMessage(removals)]
   saveAll(cats, g, now)
   await notify(alerts)
 }
